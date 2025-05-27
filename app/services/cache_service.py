@@ -4,6 +4,7 @@ Cache service for managing application caching
 from typing import Optional, Any, Union
 import json
 import hashlib
+import asyncio
 from datetime import datetime, timedelta
 import diskcache
 import redis.asyncio as redis
@@ -84,7 +85,7 @@ class CacheService:
         """Set value in cache with optional TTL (seconds)"""
         try:
             if self.cache_type == "redis":
-                serialized = json.dumps(value)
+                serialized = json.dumps(value, default=str)
                 if ttl:
                     await self.backend.setex(key, ttl, serialized)
                 else:
@@ -102,7 +103,8 @@ class CacheService:
             if self.cache_type == "redis":
                 await self.backend.delete(key)
             else:
-                del self.backend[key]
+                if key in self.backend:
+                    del self.backend[key]
             return True
         except Exception as e:
             logger.error(f"Cache delete error: {e}")
@@ -127,7 +129,7 @@ class CacheService:
                 # Disk cache doesn't support pattern matching
                 # Clear all keys starting with pattern
                 for key in list(self.backend.keys()):
-                    if key.startswith(pattern):
+                    if key.startswith(pattern.replace('*', '')):
                         del self.backend[key]
                         count += 1
         except Exception as e:
@@ -155,6 +157,69 @@ class CacheService:
         # Cache it
         await self.set(key, value, ttl)
         return value
+    
+    async def exists(self, key: str) -> bool:
+        """Check if key exists in cache"""
+        try:
+            if self.cache_type == "redis":
+                return await self.backend.exists(key) > 0
+            else:
+                return key in self.backend
+        except Exception as e:
+            logger.error(f"Cache exists error: {e}")
+            return False
+    
+    async def increment(self, key: str, amount: int = 1) -> int:
+        """Increment a numeric value in cache"""
+        try:
+            if self.cache_type == "redis":
+                return await self.backend.incrby(key, amount)
+            else:
+                current = self.backend.get(key, 0)
+                new_value = current + amount
+                self.backend.set(key, new_value)
+                return new_value
+        except Exception as e:
+            logger.error(f"Cache increment error: {e}")
+            return 0
+    
+    async def expire(self, key: str, ttl: int) -> bool:
+        """Set expiration for existing key"""
+        try:
+            if self.cache_type == "redis":
+                return await self.backend.expire(key, ttl)
+            else:
+                # For disk cache, we need to get and reset with expiration
+                value = self.backend.get(key)
+                if value is not None:
+                    self.backend.set(key, value, expire=ttl)
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"Cache expire error: {e}")
+            return False
+    
+    async def get_stats(self) -> dict:
+        """Get cache statistics"""
+        try:
+            if self.cache_type == "redis":
+                info = await self.backend.info()
+                return {
+                    "type": "redis",
+                    "connected_clients": info.get("connected_clients", 0),
+                    "used_memory": info.get("used_memory_human", "0B"),
+                    "keyspace_hits": info.get("keyspace_hits", 0),
+                    "keyspace_misses": info.get("keyspace_misses", 0)
+                }
+            else:
+                return {
+                    "type": "disk",
+                    "size": len(self.backend),
+                    "volume": self.backend.volume(),
+                }
+        except Exception as e:
+            logger.error(f"Cache stats error: {e}")
+            return {"type": self.cache_type, "error": str(e)}
 
 # Singleton instance
 cache_service = CacheService()

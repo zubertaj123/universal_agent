@@ -80,6 +80,46 @@ async def health_check():
         "version": settings.APP_VERSION
     }
 
+@app.get("/call", response_class=HTMLResponse)
+async def call_interface(request: Request):
+    """Serve the call interface page"""
+    return templates.TemplateResponse(
+        "call_interface.html",
+        {"request": request, "title": "Voice Call - Call Center AI"}
+    )
+
+@app.get("/chat", response_class=HTMLResponse) 
+async def chat_interface(request: Request):
+    """Serve the chat interface page"""
+    return HTMLResponse(content="""
+    <html>
+    <head><title>Text Chat - Call Center AI</title></head>
+    <body>
+        <h1>💬 Text Chat Interface</h1>
+        <p>Text chat functionality coming soon!</p>
+        <a href="/">← Back to Home</a>
+    </body>
+    </html>
+    """)
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_interface(request: Request):
+    """Serve the dashboard page"""
+    return HTMLResponse(content="""
+    <html>
+    <head><title>Dashboard - Call Center AI</title></head>
+    <body>
+        <h1>📊 Call Center Dashboard</h1>
+        <p>Dashboard functionality coming soon!</p>
+        <ul>
+            <li><a href="/api/calls">View API Calls</a></li>
+            <li><a href="/docs">API Documentation</a></li>
+        </ul>
+        <a href="/">← Back to Home</a>
+    </body>
+    </html>
+    """)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

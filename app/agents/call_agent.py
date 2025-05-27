@@ -9,7 +9,33 @@ from enum import Enum
 
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
 from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolExecutor, ToolInvocation
+
+# Try different import paths for ToolExecutor
+try:
+    from langgraph.prebuilt import ToolExecutor, ToolInvocation
+except ImportError:
+    try:
+        from langgraph.prebuilt.tool_executor import ToolExecutor
+        from langgraph.prebuilt.tool_node import ToolInvocation
+    except ImportError:
+        # Fallback: create our own simple tool executor
+        class ToolInvocation:
+            def __init__(self, tool: str, tool_input: dict):
+                self.tool = tool
+                self.tool_input = tool_input
+        
+        class ToolExecutor:
+            def __init__(self, tools):
+                self.tools = {tool.name: tool for tool in tools}
+            
+            async def execute(self, invocation: ToolInvocation):
+                tool = self.tools.get(invocation.tool)
+                if tool:
+                    if asyncio.iscoroutinefunction(tool.func):
+                        return await tool.func(**invocation.tool_input)
+                    else:
+                        return tool.func(**invocation.tool_input)
+                return {"error": f"Tool {invocation.tool} not found"}
 
 from app.core.config import settings
 from app.agents.tools import get_call_center_tools

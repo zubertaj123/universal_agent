@@ -212,7 +212,7 @@ async def create_call(
             customer_email=call_data.get("customer_email"),
             customer_id=call_data.get("customer_id"),
             transcript=[],
-            metadata=call_data.get("metadata", {})
+            call_metadata=call_data.get("metadata", {})
         )
         
         session.add(new_call)

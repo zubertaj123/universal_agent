@@ -1,0 +1,64 @@
+# Voice configuration for different scenarios and emotions
+voices:
+  default:
+    voice: "en-US-AriaNeural"
+    rate: "+0%"
+    pitch: "+0Hz"
+    
+  friendly:
+    voice: "en-US-JennyNeural"
+    rate: "+5%"
+    pitch: "+2Hz"
+    
+  professional:
+    voice: "en-US-GuyNeural"
+    rate: "+0%"
+    pitch: "-2Hz"
+    
+  empathetic:
+    voice: "en-US-SaraNeural"
+    rate: "-5%"
+    pitch: "+0Hz"
+    
+  urgent:
+    voice: "en-US-AriaNeural"
+    rate: "+10%"
+    pitch: "+5Hz"
+
+# Language-specific voices
+languages:
+  en:
+    voices:
+      - "en-US-AriaNeural"
+      - "en-US-JennyNeural"
+      - "en-US-GuyNeural"
+      - "en-US-SaraNeural"
+    default: "en-US-AriaNeural"
+    
+  es:
+    voices:
+      - "es-ES-ElviraNeural"
+      - "es-ES-AlvaroNeural"
+    default: "es-ES-ElviraNeural"
+    
+  fr:
+    voices:
+      - "fr-FR-DeniseNeural"
+      - "fr-FR-HenriNeural"
+    default: "fr-FR-DeniseNeural"
+    
+  de:
+    voices:
+      - "de-DE-KatjaNeural"
+      - "de-DE-ConradNeural"
+    default: "de-DE-KatjaNeural"
+
+# Emotion mappings
+emotions:
+  neutral: "default"
+  happy: "friendly"
+  sad: "empathetic"
+  angry: "empathetic"
+  confused: "friendly"
+  urgent: "urgent"
+  professional: "professional"

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Call - Call Center AI</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="call-interface">
+        <header>
+            <h1>Voice Call Interface</h1>
+            <button onclick="endCall()" class="btn btn-danger">End Call</button>
+        </header>
+        
+        <div class="call-container">
+            <div class="status-panel">
+                <div class="status-item">
+                    <span class="label">Status:</span>
+                    <span id="call-status" class="value">Initializing...</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Duration:</span>
+                    <span id="call-duration" class="value">00:00</span>
+                </div>
+                <div class="status-item">
+                    <span class="label">Agent:</span>
+                    <span id="agent-name" class="value">AI Assistant</span>
+                </div>
+            </div>
+            
+            <div class="audio-visualizer">
+                <canvas id="audio-canvas" width="400" height="100"></canvas>
+            </div>
+            
+            <div class="transcript-container">
+                <h3>Conversation Transcript</h3>
+                <div id="transcript" class="transcript">
+                    <!-- Transcript will be added here -->
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button id="mute-btn" onclick="toggleMute()" class="btn">
+                    🎤 Mute
+                </button>
+                <button id="pause-btn" onclick="togglePause()" class="btn">
+                    ⏸️ Pause
+                </button>
+                <button onclick="transferToHuman()" class="btn">
+                    👤 Transfer to Human
+                </button>
+            </div>
+        </div>
+        
+        <div class="debug-panel" style="display: none;">
+            <h4>Debug Info</h4>
+            <pre id="debug-info"></pre>
+        </div>
+    </div>
+    
+    <script src="/static/js/call_handler.js"></script>
+</body>
+</html>

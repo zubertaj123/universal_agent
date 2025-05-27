@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/db/call_center.db
+      - REDIS_URL=redis://redis:6379
+      - TTS_CACHE_ENABLED=true
+      - DEBUG=true
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  # Optional: ChromaDB for vector storage
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  chroma_data:

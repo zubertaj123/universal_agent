@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Call Center AI</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Local Call Center AI</h1>
+            <p>AI-powered call center running locally</p>
+        </header>
+        
+        <main>
+            <div class="options">
+                <div class="option-card">
+                    <h2>📞 Voice Call</h2>
+                    <p>Start a voice conversation with the AI agent</p>
+                    <button onclick="startVoiceCall()" class="btn btn-primary">
+                        Start Voice Call
+                    </button>
+                </div>
+                
+                <div class="option-card">
+                    <h2>💬 Text Chat</h2>
+                    <p>Chat with the AI agent via text</p>
+                    <button onclick="startTextChat()" class="btn btn-secondary">
+                        Start Text Chat
+                    </button>
+                </div>
+                
+                <div class="option-card">
+                    <h2>📊 Dashboard</h2>
+                    <p>View call history and analytics</p>
+                    <button onclick="openDashboard()" class="btn btn-tertiary">
+                        Open Dashboard
+                    </button>
+                </div>
+            </div>
+            
+            <div class="features">
+                <h3>Features</h3>
+                <ul>
+                    <li>✅ Real-time speech recognition</li>
+                    <li>✅ Natural language understanding</li>
+                    <li>✅ Multi-language support</li>
+                    <li>✅ Knowledge base integration</li>
+                    <li>✅ Call recording and transcription</li>
+                    <li>✅ Sentiment analysis</li>
+                </ul>
+            </div>
+        </main>
+        
+        <footer>
+            <p>&copy; 2024 Local Call Center AI - Running locally</p>
+        </footer>
+    </div>
+    
+    <script src="/static/js/call_handler.js"></script>
+    <script>
+        function startVoiceCall() {
+            window.location.href = '/call';
+        }
+        
+        function startTextChat() {
+            window.location.href = '/chat';
+        }
+        
+        function openDashboard() {
+            window.location.href = '/dashboard';
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+CLAIMS PROCESSING GUIDE
+
+INITIAL CLAIM INTAKE
+1. Verify customer identity
+   - Ask for policy number
+   - Confirm name and address
+   - Verify phone number
+
+2. Gather incident information
+   - Date and time of incident
+   - Location (specific address)
+   - Description of what happened
+   - Any injuries (refer to medical team if yes)
+   - Other parties involved
+
+3. Document damage
+   - Request photos if possible
+   - Schedule inspection if needed
+   - Note all affected items/areas
+
+AUTO CLAIMS SPECIFIC
+- Vehicle make, model, year
+- Location of vehicle now
+- Driveable or not
+- Other vehicles involved
+- Police report filed?
+- Injuries to any party
+- Witnesses present
+
+HOME CLAIMS SPECIFIC
+- Type of damage (water, fire, theft, etc.)
+- Affected rooms/areas
+- Temporary repairs made?
+- Still habitable?
+- Personal property affected
+- Need emergency services?
+
+CLAIM PRIORITY LEVELS
+HIGH PRIORITY:
+- Injuries involved
+- Home uninhabitable
+- Vehicle undriveable
+- Total loss suspected
+
+MEDIUM PRIORITY:
+- Significant damage
+- Multiple parties involved
+- Business interruption
+
+STANDARD PRIORITY:
+- Minor damage
+- Single party
+- No injuries
+
+NEXT STEPS
+1. Assign claim number
+2. Set expectations for timeline
+3. Explain deductible
+4. Schedule adjuster if needed
+5. Provide claim number and contact info
+6. Send confirmation email/SMS
+
+ESCALATION TRIGGERS
+Escalate to supervisor if:
+- Customer threatening legal action
+- Claim over $50,000
+- Multiple previous claims
+- Suspected fraud
+- VIP customer
+- Media involvement

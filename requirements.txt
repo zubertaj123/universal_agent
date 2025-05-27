@@ -1,0 +1,48 @@
+# Core Framework
+fastapi
+uvicorn
+websockets
+python-dotenv
+pydantic
+pydantic-settings
+
+# LLM and AI
+openai
+anthropic
+langchain
+langgraph
+tiktoken
+
+# Speech Processing
+edge-tts
+faster-whisper
+pyaudio
+scipy
+numpy
+librosa
+silero-vad
+
+# Vector Database
+chromadb
+sentence-transformers
+
+# Database
+sqlalchemy
+alembic
+aiosqlite
+
+# Caching
+redis
+diskcache
+
+# Utils
+pyyaml
+aiofiles
+python-multipart
+jinja2
+
+# Development
+pytest
+pytest-asyncio
+black
+isort

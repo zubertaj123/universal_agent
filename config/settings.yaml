@@ -1,0 +1,42 @@
+app:
+  name: "Local Call Center AI"
+  version: "1.0.0"
+  description: "AI-powered call center running locally"
+  
+api:
+  title: "Call Center API"
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"
+  max_websocket_connections: 100
+  
+speech:
+  stt:
+    model_size: "base"  # tiny, base, small, medium, large
+    language: "en"
+    device: "auto"  # cuda, cpu, auto
+    compute_type: "float16"  # float16, int8
+    vad_filter: true
+    vad_threshold: 0.5
+    
+  tts:
+    default_voice: "en-US-AriaNeural"
+    cache_enabled: true
+    streaming_enabled: true
+    
+audio:
+  sample_rate: 16000
+  channels: 1
+  chunk_duration_ms: 20
+  
+agent:
+  max_turns: 20
+  timeout_seconds: 300
+  context_window: 10
+  
+llm:
+  temperature: 0.7
+  max_tokens: 500
+  top_p: 0.9
+  presence_penalty: 0.1
+  frequency_penalty: 0.1

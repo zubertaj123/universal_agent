@@ -20,7 +20,17 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = "sqlite:///./data/db/call_center.db"
-    
+
+    # New fields to match .env
+    APP_ENV: str = "development"
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    VECTOR_DB_PATH: str = "./data/db/vectors"
+
+    model_config = {
+        "extra": "forbid",
+        "env_file": ".env",
+    }
+
     # Redis
     REDIS_URL: Optional[str] = None
     
@@ -51,9 +61,6 @@ class Settings(BaseSettings):
     CACHE_DIR: Path = Path("./data/cache")
     AUDIO_DIR: Path = Path("./data/audio")
     
-    class Config:
-        env_file = ".env"
-        
     def load_yaml_config(self, config_path: str = "config/settings.yaml"):
         """Load additional settings from YAML"""
         if Path(config_path).exists():

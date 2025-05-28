@@ -44,7 +44,7 @@ class VoiceSystemTester:
     
     async def test_tts_basic(self):
         """Test basic text-to-speech functionality"""
-        print("\n🎤 Testing Text-to-Speech...")
+        print("\n🎤 Testing Text-to-Speech....")
         
         test_phrases = [
             ("Hello! How can I help you today?", VoiceStyle.FRIENDLY),

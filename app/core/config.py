@@ -37,10 +37,9 @@ class Settings(BaseSettings):
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    HTTPS_PORT: int = 8443
+    HTTPS_PORT: int = 8000
     CORS_ORIGINS: List[str] = [
-        "https://localhost:8443", 
-        "https://127.0.0.1:8443",
+        "https://127.0.0.1:8000",
         "http://localhost:3000", 
         "http://localhost:8000"
     ]

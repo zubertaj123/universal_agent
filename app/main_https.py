@@ -51,7 +51,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://localhost:8443", "https://127.0.0.1:8443"],
+    allow_origins=["https://localhost:8000", "https://127.0.0.1:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -134,7 +134,7 @@ def run_https_server():
         return
     
     print("🚀 Starting HTTPS server...")
-    print("📱 Visit: https://localhost:8443")
+    print("📱 Visit: https://localhost:8000")
     print("⚠️  You'll need to accept the self-signed certificate warning")
     
     # Create SSL context
@@ -144,7 +144,7 @@ def run_https_server():
     uvicorn.run(
         "app.main:app",  # Use the original main.py
         host="0.0.0.0",
-        port=8443,
+        port=8000,
         ssl_keyfile=str(key_file),
         ssl_certfile=str(cert_file),
         reload=False,  # Disable reload with SSL

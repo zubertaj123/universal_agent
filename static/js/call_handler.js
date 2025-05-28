@@ -47,7 +47,9 @@ class CallHandler {
     }
 
     connectWebSocket() {
-        const wsUrl = `ws://localhost:8000/ws/call/${this.sessionId}`;
+
+        const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+        const wsUrl = `${wsScheme}://${window.location.host}/ws/call/${this.sessionId}`;
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
@@ -75,26 +77,28 @@ class CallHandler {
 
     setupAudioRecording() {
         this.mediaRecorder = new MediaRecorder(this.mediaStream);
-        
+                
         this.mediaRecorder.ondataavailable = (event) => {
             if (event.data.size > 0 && !this.isPaused && !this.isMuted) {
-                // Convert blob to array buffer
                 event.data.arrayBuffer().then(buffer => {
                     const uint8Array = new Uint8Array(buffer);
                     const hexString = Array.from(uint8Array)
                         .map(b => b.toString(16).padStart(2, '0'))
                         .join('');
                     
-                    // Send audio data over WebSocket
-                    if (this.isConnected) {
+                    // ✅ Safely send only when WebSocket is ready
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                         this.ws.send(JSON.stringify({
                             type: 'audio',
                             data: hexString
                         }));
+                    } else {
+                        console.warn('WebSocket not ready. Skipped sending audio chunk.');
                     }
                 });
             }
         };
+
         
         // Start recording in chunks
         this.mediaRecorder.start(100); // 100ms chunks

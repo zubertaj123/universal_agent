@@ -68,6 +68,11 @@
         // Additional functions for the call interface
         async function startCall() {
             console.log('Start call clicked');
+            console.log('Current location:', window.location.href);
+            console.log('Protocol:', window.location.protocol);
+            console.log('Host:', window.location.host);
+            console.log('Hostname:', window.location.hostname);
+            console.log('Port:', window.location.port);
             
             if (!callHandler) {
                 callHandler = new CallHandler();

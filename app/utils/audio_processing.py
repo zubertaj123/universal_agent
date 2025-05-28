@@ -7,6 +7,8 @@ from scipy.fft import fft, fftfreq
 from typing import Tuple, Optional, List, Dict, Any
 import librosa
 import io
+# from pydub import AudioSegment
+import ffmpeg
 import wave
 from app.utils.logger import setup_logger
 
@@ -30,7 +32,32 @@ class AudioProcessor:
         self.vad_threshold = 0.01
         self.min_speech_duration = 0.3  # seconds
         self.min_silence_duration = 0.5  # seconds
-        
+
+    def decode_and_resample_browser_audio(audio_bytes: bytes):
+        try:
+            out, _ = (
+                ffmpeg
+                .input('pipe:0', format='webm')  # Replace with correct format
+                .output('pipe:1', format='wav', ac=1, ar='16000')
+                .run(input=audio_bytes, capture_stdout=True, capture_stderr=True)
+            )
+            return out
+        except ffmpeg.Error as e:
+            print("FFmpeg Error:", e.stderr.decode())
+            raise
+
+    def frame_audio(self, audio: np.ndarray, frame_size: int = 512) -> list:
+        """
+        Split audio into frames of frame_size samples.
+        Returns a list of numpy arrays.
+        """
+        frames = []
+        for i in range(0, len(audio), frame_size):
+            chunk = audio[i:i + frame_size]
+            if len(chunk) == frame_size:
+                frames.append(chunk)
+        return frames
+
     def preprocess_audio(self, audio: np.ndarray) -> np.ndarray:
         """Comprehensive audio preprocessing pipeline"""
         try:

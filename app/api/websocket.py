@@ -40,24 +40,29 @@ class CallSession:
         self.start_time = datetime.now()
         
     async def handle_audio_stream(self, audio_data: bytes) -> Optional[np.ndarray]:
-        """Process incoming audio"""
+        """Process incoming audio from browser"""
         try:
-            # Convert bytes to numpy array
-            audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-            self.audio_buffer.append(audio_array)
-            
-            # Process when we have enough data (approximately 1 second)
-            if len(self.audio_buffer) >= 50:  # Assuming 20ms chunks
-                full_audio = np.concatenate(self.audio_buffer)
-                self.audio_buffer = []
-                
-                # Apply audio preprocessing
-                processed_audio = self.audio_processor.preprocess_audio(full_audio)
-                
+            # Decode and resample browser audio (e.g., webm/opus) to mono 16kHz PCM float32
+            audio_pcm = self.audio_processor.decode_and_resample_browser_audio(audio_data, target_sr=16000)
+            if audio_pcm.size == 0:
+                return None
+
+            # Buffer audio until at least 512 samples (16kHz = 32ms)
+            self.audio_buffer.append(audio_pcm)
+            buffered = np.concatenate(self.audio_buffer) if self.audio_buffer else audio_pcm
+
+            # Only process in chunks of 512 samples
+            frames = self.audio_processor.frame_audio(buffered, frame_size=512)
+            if frames:
+                # Remove used samples from buffer
+                used_samples = len(frames) * 512
+                self.audio_buffer = [buffered[used_samples:]] if buffered[used_samples:].size > 0 else []
+                # Only process the first frame (for VAD), or process all as needed
+                processed_audio = self.audio_processor.preprocess_audio(frames[0])
                 return processed_audio
-                
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Audio processing error: {e}")
             return None
@@ -112,11 +117,12 @@ async def websocket_call(
     session_id: Optional[str] = None
 ):
     """WebSocket endpoint for call handling"""
+    logger.info("WebSocket endpoint hit")
     if not session_id:
         session_id = str(uuid.uuid4())
-        
+    logger.info("About to accept WebSocket")
     await websocket.accept()
-    logger.info(f"WebSocket connection accepted for session {session_id}")
+    logger.info("WebSocket accepted for session %s", session_id)
     
     # Initialize services
     speech_service = SpeechService()
@@ -272,7 +278,7 @@ async def handle_audio_message(
         # Convert hex string to bytes
         audio_bytes = bytes.fromhex(audio_data)
         
-        # Process audio stream
+        # Process audio stream (now handles browser blobs, resampling, framing)
         processed_audio = await session.handle_audio_stream(audio_bytes)
         
         if processed_audio is not None:

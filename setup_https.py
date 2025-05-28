@@ -171,7 +171,7 @@ async def health_check():
     }
 
 def run_https_server():
-    """Run server with HTTPS"""
+    """Run server with HTTPS on port 8000"""
     cert_file = Path("certs/cert.pem")
     key_file = Path("certs/key.pem")
     
@@ -179,8 +179,8 @@ def run_https_server():
         print("❌ SSL certificates not found. Run setup_https.py first.")
         return
     
-    print("🚀 Starting HTTPS server...")
-    print("📱 Visit: https://localhost:8443")
+    print("🚀 Starting HTTPS server on port 8000...")
+    print("📱 Visit: https://localhost:8000")
     print("⚠️  You'll need to accept the self-signed certificate warning")
     
     # Create SSL context
@@ -190,7 +190,7 @@ def run_https_server():
     uvicorn.run(
         "app.main:app",  # Use the original main.py
         host="0.0.0.0",
-        port=8443,
+        port=8000,  # Use standard port 8000 for HTTPS
         ssl_keyfile=str(key_file),
         ssl_certfile=str(cert_file),
         reload=False,  # Disable reload with SSL

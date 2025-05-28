@@ -26,7 +26,7 @@ logger = setup_logger(__name__)
 websocket_router = APIRouter()
 
 class CallSession:
-    """Manages a single call session"""
+    """Manages a single call session - Updated version"""
     
     def __init__(self, session_id: str, websocket: WebSocket):
         self.session_id = session_id
@@ -38,36 +38,85 @@ class CallSession:
         self.call_record_id = None
         self.customer_id = None
         self.start_time = datetime.now()
+        self.last_audio_time = datetime.now()
+        self.audio_chunk_count = 0
         
     async def handle_audio_stream(self, audio_data: bytes) -> Optional[np.ndarray]:
-        """Process incoming audio from browser"""
+        """Process incoming audio from browser - Improved version"""
         try:
-            # Fixed: Use the corrected method signature
-            audio_pcm = self.audio_processor.decode_and_resample_browser_audio(audio_data)
+            self.audio_chunk_count += 1
+            self.last_audio_time = datetime.now()
             
-            if audio_pcm.size == 0:
+            # Log audio data info for debugging
+            if self.audio_chunk_count % 100 == 0:  # Log every 100th chunk
+                logger.debug(f"Processing audio chunk #{self.audio_chunk_count}, size: {len(audio_data)} bytes")
+            
+            # Decode and resample browser audio with improved error handling
+            try:
+                audio_pcm = self.audio_processor.decode_and_resample_browser_audio(audio_data)
+            except Exception as e:
+                logger.error(f"Audio decoding failed: {e}")
                 return None
 
-            # Buffer audio until at least 512 samples (16kHz = 32ms)
+            if audio_pcm is None or audio_pcm.size == 0:
+                logger.debug("No audio data returned from decoder")
+                return None
+
+            # Buffer audio until we have enough for processing
             self.audio_buffer.append(audio_pcm)
-            buffered = np.concatenate(self.audio_buffer) if self.audio_buffer else audio_pcm
+            
+            # Combine buffered audio
+            try:
+                buffered = np.concatenate(self.audio_buffer) if self.audio_buffer else audio_pcm
+            except ValueError as e:
+                logger.error(f"Audio buffer concatenation failed: {e}")
+                self.audio_buffer = [audio_pcm]  # Reset buffer
+                buffered = audio_pcm
 
-            # Only process in chunks of 512 samples
-            frames = self.audio_processor.frame_audio(buffered, frame_size=512)
-            if frames:
-                # Remove used samples from buffer
-                used_samples = len(frames) * 512
-                self.audio_buffer = [buffered[used_samples:]] if buffered[used_samples:].size > 0 else []
-                # Only process the first frame (for VAD), or process all as needed
-                processed_audio = self.audio_processor.preprocess_audio(frames[0])
-                return processed_audio
-
-            return None
+            # Process in chunks for better real-time performance
+            min_chunk_size = 512  # Minimum samples to process
+            if len(buffered) >= min_chunk_size:
+                try:
+                    # Take the first chunk for processing
+                    chunk_to_process = buffered[:min_chunk_size]
+                    
+                    # Keep remaining audio in buffer
+                    if len(buffered) > min_chunk_size:
+                        self.audio_buffer = [buffered[min_chunk_size:]]
+                    else:
+                        self.audio_buffer = []
+                    
+                    # Preprocess the audio chunk
+                    processed_audio = self.audio_processor.preprocess_audio(chunk_to_process)
+                    
+                    return processed_audio
+                    
+                except Exception as e:
+                    logger.error(f"Audio chunk processing failed: {e}")
+                    self.audio_buffer = []  # Reset buffer on error
+                    return None
+            else:
+                # Not enough audio yet, wait for more
+                return None
 
         except Exception as e:
-            logger.error(f"Audio processing error: {e}")
+            logger.error(f"Audio stream processing error: {e}")
+            # Reset buffer on any error to prevent corruption
+            self.audio_buffer = []
             return None
-    
+
+    def get_session_stats(self) -> Dict[str, Any]:
+        """Get session statistics for monitoring"""
+        return {
+            "session_id": self.session_id,
+            "is_active": self.is_active,
+            "duration_seconds": (datetime.now() - self.start_time).total_seconds(),
+            "audio_chunks_processed": self.audio_chunk_count,
+            "last_audio_time": self.last_audio_time.isoformat(),
+            "buffer_size": len(self.audio_buffer),
+            "call_record_id": self.call_record_id
+        }
+
     async def create_call_record(self):
         """Create database record for this call"""
         try:
@@ -111,6 +160,110 @@ class CallSession:
                     
         except Exception as e:
             logger.error(f"Failed to update call record: {e}")
+
+
+async def handle_audio_message(
+    message: dict,
+    session: CallSession,
+    agent_state: AgentState,
+    speech_service: SpeechService,
+    websocket: WebSocket
+):
+    """Handle audio data from client - Fixed version"""
+    try:
+        audio_data = message.get("data", "")
+        if not audio_data:
+            return
+            
+        # Convert hex string to bytes with error handling
+        try:
+            audio_bytes = bytes.fromhex(audio_data)
+        except ValueError as e:
+            logger.warning(f"Invalid hex audio data: {e}")
+            return
+        
+        if len(audio_bytes) == 0:
+            return
+            
+        # Process audio stream with improved error handling
+        try:
+            processed_audio = await session.handle_audio_stream(audio_bytes)
+        except Exception as e:
+            logger.error(f"Audio stream processing failed: {e}")
+            # Continue processing but with a placeholder
+            processed_audio = None
+        
+        # Only proceed with transcription if we have valid audio
+        if processed_audio is not None and len(processed_audio) > 0:
+            try:
+                # Check for voice activity with fallback
+                has_speech = False
+                try:
+                    has_speech = speech_service.detect_voice_activity(processed_audio)
+                except Exception as e:
+                    logger.warning(f"VAD failed: {e}, using basic energy detection")
+                    # Fallback to simple energy-based detection
+                    rms_energy = np.sqrt(np.mean(processed_audio**2))
+                    has_speech = rms_energy > 0.001
+                
+                if has_speech:
+                    logger.debug("Speech detected, attempting transcription")
+                    
+                    # Transcribe audio with timeout and error handling
+                    transcription = None
+                    try:
+                        # Add timeout to prevent hanging
+                        transcription = await asyncio.wait_for(
+                            speech_service.transcribe(processed_audio),
+                            timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Transcription timeout")
+                    except Exception as e:
+                        logger.error(f"Transcription failed: {e}")
+                    
+                    # Process transcription if successful
+                    if transcription and transcription.strip():
+                        logger.info(f"Transcribed: {transcription}")
+                        
+                        # Send transcript to client
+                        await send_message_to_client(websocket, "transcript", {
+                            "speaker": "user",
+                            "text": transcription
+                        })
+                        
+                        # Add to agent state
+                        agent_state["messages"].append({
+                            "role": "user",
+                            "content": transcription,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        # Update call record safely
+                        try:
+                            await session.update_call_record(
+                                transcript=agent_state["messages"]
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to update call record: {e}")
+                        
+                        # Trigger agent processing
+                        agent_state["current_speaker"] = "user"
+                    else:
+                        logger.debug("No transcription result or empty text")
+                else:
+                    logger.debug("No speech detected in audio chunk")
+            except Exception as e:
+                logger.error(f"Speech processing failed: {e}")
+        else:
+            logger.debug("No valid audio data to process")
+            
+    except Exception as e:
+        logger.error(f"Error handling audio message: {e}")
+        await send_message_to_client(websocket, "error", {
+            "message": "Error processing audio - continuing with demo mode"
+        })
+
 
 @websocket_router.websocket("/ws/call/{session_id}")
 async def websocket_call(
@@ -263,62 +416,6 @@ async def handle_websocket_message(
     else:
         logger.warning(f"Unknown message type: {message_type}")
 
-async def handle_audio_message(
-    message: dict,
-    session: CallSession,
-    agent_state: AgentState,
-    speech_service: SpeechService,
-    websocket: WebSocket
-):
-    """Handle audio data from client"""
-    try:
-        audio_data = message.get("data", "")
-        if not audio_data:
-            return
-            
-        # Convert hex string to bytes
-        audio_bytes = bytes.fromhex(audio_data)
-        
-        # Process audio stream (now handles browser blobs, resampling, framing)
-        processed_audio = await session.handle_audio_stream(audio_bytes)
-        
-        if processed_audio is not None:
-            # Check for voice activity
-            has_speech = speech_service.detect_voice_activity(processed_audio)
-            
-            if has_speech:
-                # Transcribe audio
-                transcription = await speech_service.transcribe(processed_audio)
-                
-                if transcription and transcription.strip():
-                    logger.debug(f"Transcribed: {transcription}")
-                    
-                    # Send transcript to client
-                    await send_message_to_client(websocket, "transcript", {
-                        "speaker": "user",
-                        "text": transcription
-                    })
-                    
-                    # Add to agent state
-                    agent_state["messages"].append({
-                        "role": "user",
-                        "content": transcription,
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    
-                    # Update call record
-                    await session.update_call_record(
-                        transcript=agent_state["messages"]
-                    )
-                    
-                    # Trigger agent processing
-                    agent_state["current_speaker"] = "user"
-                    
-    except Exception as e:
-        logger.error(f"Error handling audio message: {e}")
-        await send_message_to_client(websocket, "error", {
-            "message": "Error processing audio"
-        })
 
 async def handle_text_message(
     message: dict,

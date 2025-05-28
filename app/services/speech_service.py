@@ -133,11 +133,24 @@ class SpeechService:
         stream: bool = True
     ) -> AsyncGenerator[bytes, None]:
         """Convert text to speech"""
-        voice = voice or self.current_voice
+        # Fix voice style mapping
+        voice_style = voice or self.current_voice
+        
+        # Map voice styles to actual Edge TTS voice names
+        voice_mapping = {
+            "professional": "en-US-AriaNeural",
+            "friendly": "en-US-JennyNeural", 
+            "technical": "en-US-TonyNeural",
+            "empathetic": "en-US-SaraNeural",
+            "multilingual": "en-US-JennyMultilingualNeural"
+        }
+        
+        # Use mapping if it's a style name, otherwise use as-is
+        actual_voice = voice_mapping.get(voice_style.lower(), voice_style)
         
         # Check cache
         if settings.TTS_CACHE_ENABLED and not stream:
-            cache_key = self._get_cache_key(text, voice, rate, pitch)
+            cache_key = self._get_cache_key(text, actual_voice, rate, pitch)
             cached_file = self.tts_cache_dir / f"{cache_key}.mp3"
             
             if cached_file.exists():
@@ -147,7 +160,7 @@ class SpeechService:
                 return
                 
         # Generate speech
-        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        communicate = edge_tts.Communicate(text, actual_voice, rate=rate, pitch=pitch)
         
         if stream:
             # Stream audio chunks
@@ -156,7 +169,7 @@ class SpeechService:
                     yield chunk["data"]
         else:
             # Save to cache
-            cache_key = self._get_cache_key(text, voice, rate, pitch)
+            cache_key = self._get_cache_key(text, actual_voice, rate, pitch)
             cached_file = self.tts_cache_dir / f"{cache_key}.mp3"
             
             await communicate.save(str(cached_file))
@@ -171,7 +184,16 @@ class SpeechService:
         
     def set_voice(self, voice: str):
         """Set current voice"""
-        self.current_voice = voice
+        # Map voice styles to actual names
+        voice_mapping = {
+            "professional": "en-US-AriaNeural",
+            "friendly": "en-US-JennyNeural",
+            "technical": "en-US-TonyNeural", 
+            "empathetic": "en-US-SaraNeural",
+            "multilingual": "en-US-JennyMultilingualNeural"
+        }
+        
+        self.current_voice = voice_mapping.get(voice.lower(), voice)
         
     async def get_voice_for_language(self, language: str, gender: str = "Female") -> Optional[str]:
         """Get appropriate voice for language"""

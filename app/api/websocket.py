@@ -42,8 +42,9 @@ class CallSession:
     async def handle_audio_stream(self, audio_data: bytes) -> Optional[np.ndarray]:
         """Process incoming audio from browser"""
         try:
-            # Decode and resample browser audio (e.g., webm/opus) to mono 16kHz PCM float32
-            audio_pcm = self.audio_processor.decode_and_resample_browser_audio(audio_data, target_sr=16000)
+            # Fixed: Use the corrected method signature
+            audio_pcm = self.audio_processor.decode_and_resample_browser_audio(audio_data)
+            
             if audio_pcm.size == 0:
                 return None
 
@@ -79,7 +80,7 @@ class CallSession:
                     status=CallStatus.ACTIVE,
                     started_at=self.start_time,
                     transcript=[],
-                    metadata={"websocket_session": True}
+                    call_metadata={"websocket_session": True}  # Fixed: use call_metadata instead of metadata
                 )
                 
                 session.add(call_record)
@@ -173,8 +174,8 @@ async def websocket_call(
             "text": greeting
         })
         
-        # Generate and send TTS for greeting
-        await generate_and_send_tts(websocket, speech_service, greeting)
+        # Generate and send TTS for greeting - Fixed: use proper voice style
+        await generate_and_send_tts(websocket, speech_service, greeting, "en-US-AriaNeural")
         
         # Add greeting to conversation
         agent_state["messages"].append({
@@ -460,8 +461,8 @@ async def run_agent_loop(
                             "text": response_text
                         })
                         
-                        # Generate and send TTS
-                        await generate_and_send_tts(websocket, speech_service, response_text)
+                        # Generate and send TTS - Fixed: use proper voice
+                        await generate_and_send_tts(websocket, speech_service, response_text, "en-US-AriaNeural")
                         
                         # Update call record
                         await session.update_call_record(
@@ -497,7 +498,7 @@ async def handle_audio_output(
             if audio_request["type"] == "speech":
                 text = audio_request["content"]
                 emotion = audio_request.get("emotion", "neutral")
-                voice_style = audio_request.get("voice_style", "professional")
+                voice_style = audio_request.get("voice_style", "en-US-AriaNeural")  # Fixed: use actual voice name
                 
                 logger.debug(f"Generating TTS for: {text[:50]}...")
                 
@@ -538,7 +539,7 @@ async def generate_and_send_tts(
     websocket: WebSocket,
     speech_service: SpeechService,
     text: str,
-    voice_style: str = "professional"
+    voice_style: str = "en-US-AriaNeural"  # Fixed: use actual voice name
 ):
     """Generate TTS and send audio to client"""
     try:

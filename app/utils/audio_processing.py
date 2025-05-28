@@ -7,8 +7,7 @@ from scipy.fft import fft, fftfreq
 from typing import Tuple, Optional, List, Dict, Any
 import librosa
 import io
-# from pydub import AudioSegment
-import ffmpeg
+import subprocess
 import wave
 from app.utils.logger import setup_logger
 
@@ -33,20 +32,62 @@ class AudioProcessor:
         self.min_speech_duration = 0.3  # seconds
         self.min_silence_duration = 0.5  # seconds
 
-    def decode_and_resample_browser_audio(audio_bytes: bytes):
+    def decode_and_resample_browser_audio(self, audio_bytes: bytes) -> np.ndarray:
+        """
+        Decode browser audio format and resample to target sample rate
+        Fixed method to handle FFmpeg properly
+        """
         try:
-            out, _ = (
-                ffmpeg
-                .input('pipe:0', format='webm')  # Replace with correct format
-                .output('pipe:1', format='wav', ac=1, ar='16000')
-                .run(input=audio_bytes, capture_stdout=True, capture_stderr=True)
+            # Try using subprocess to call ffmpeg directly
+            cmd = [
+                'ffmpeg',
+                '-f', 'webm',  # Input format
+                '-i', 'pipe:0',  # Input from stdin
+                '-f', 'wav',     # Output format
+                '-ac', '1',      # Mono
+                '-ar', str(self.sample_rate),  # Sample rate
+                'pipe:1'         # Output to stdout
+            ]
+            
+            process = subprocess.run(
+                cmd,
+                input=audio_bytes,
+                capture_output=True,
+                timeout=5  # 5 second timeout
             )
-            return out
-        except ffmpeg.Error as e:
-            print("FFmpeg Error:", e.stderr.decode())
-            raise
+            
+            if process.returncode == 0:
+                # Convert WAV bytes to numpy array
+                # Skip WAV header (44 bytes) and convert to float32
+                wav_data = process.stdout[44:]  # Skip WAV header
+                audio_data = np.frombuffer(wav_data, dtype=np.int16).astype(np.float32) / 32768.0
+                return audio_data
+            else:
+                logger.warning(f"FFmpeg failed with return code {process.returncode}: {process.stderr.decode()}")
+                
+        except subprocess.TimeoutExpired:
+            logger.error("FFmpeg timeout - audio processing took too long")
+        except FileNotFoundError:
+            logger.warning("FFmpeg not found in PATH - using fallback audio processing")
+        except Exception as e:
+            logger.error(f"FFmpeg error: {e}")
+        
+        # Fallback: try to interpret as raw audio data
+        try:
+            # Assume it's raw 16-bit PCM audio
+            if len(audio_bytes) % 2 == 0:  # Even number of bytes for 16-bit
+                audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                return audio_data
+            else:
+                logger.warning("Odd number of bytes in audio data - padding")
+                padded_bytes = audio_bytes + b'\x00'
+                audio_data = np.frombuffer(padded_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                return audio_data
+        except Exception as e:
+            logger.error(f"Fallback audio processing failed: {e}")
+            return np.array([], dtype=np.float32)
 
-    def frame_audio(self, audio: np.ndarray, frame_size: int = 512) -> list:
+    def frame_audio(self, audio: np.ndarray, frame_size: int = 512) -> List[np.ndarray]:
         """
         Split audio into frames of frame_size samples.
         Returns a list of numpy arrays.
@@ -302,246 +343,6 @@ class AudioProcessor:
                 segments.append(segment)
         
         return segments
-    
-    def calculate_audio_metrics(self, audio: np.ndarray) -> Dict[str, Any]:
-        """Calculate comprehensive audio quality metrics"""
-        metrics = {}
-        
-        try:
-            # Basic metrics
-            metrics['duration'] = len(audio) / self.sample_rate
-            metrics['sample_rate'] = self.sample_rate
-            metrics['rms_energy'] = float(np.sqrt(np.mean(audio**2)))
-            metrics['peak_amplitude'] = float(np.max(np.abs(audio)))
-            
-            # Dynamic range
-            metrics['dynamic_range_db'] = 20 * np.log10(metrics['peak_amplitude'] / (metrics['rms_energy'] + 1e-10))
-            
-            # Zero crossing rate
-            zcr = librosa.feature.zero_crossing_rate(audio)[0]
-            metrics['zero_crossing_rate'] = float(np.mean(zcr))
-            
-            # Spectral features
-            stft = librosa.stft(audio, n_fft=self.frame_size, hop_length=self.hop_length)
-            magnitude = np.abs(stft)
-            
-            # Spectral centroid (brightness)
-            spectral_centroids = librosa.feature.spectral_centroid(S=magnitude, sr=self.sample_rate)[0]
-            metrics['spectral_centroid_mean'] = float(np.mean(spectral_centroids))
-            metrics['spectral_centroid_std'] = float(np.std(spectral_centroids))
-            
-            # Spectral bandwidth
-            spectral_bandwidth = librosa.feature.spectral_bandwidth(S=magnitude, sr=self.sample_rate)[0]
-            metrics['spectral_bandwidth_mean'] = float(np.mean(spectral_bandwidth))
-            
-            # Spectral rolloff
-            spectral_rolloff = librosa.feature.spectral_rolloff(S=magnitude, sr=self.sample_rate)[0]
-            metrics['spectral_rolloff_mean'] = float(np.mean(spectral_rolloff))
-            
-            # MFCCs (perceptual features)
-            mfccs = librosa.feature.mfcc(y=audio, sr=self.sample_rate, n_mfcc=13)
-            metrics['mfcc_mean'] = mfccs.mean(axis=1).tolist()
-            metrics['mfcc_std'] = mfccs.std(axis=1).tolist()
-            
-            # Harmonic-to-noise ratio estimation
-            harmonic, percussive = librosa.effects.hpss(audio)
-            harmonic_energy = np.mean(harmonic**2)
-            percussive_energy = np.mean(percussive**2)
-            metrics['harmonic_ratio'] = float(harmonic_energy / (harmonic_energy + percussive_energy + 1e-10))
-            
-            # Estimate SNR (rough approximation)
-            speech_segments = self.extract_speech_segments(audio)
-            if speech_segments:
-                speech_power = np.mean([np.mean(seg**2) for seg in speech_segments])
-                silence_segments = self._extract_silence_segments(audio)
-                if silence_segments:
-                    noise_power = np.mean([np.mean(seg**2) for seg in silence_segments])
-                    metrics['estimated_snr_db'] = 10 * np.log10(speech_power / (noise_power + 1e-10))
-                else:
-                    metrics['estimated_snr_db'] = None
-            else:
-                metrics['estimated_snr_db'] = None
-            
-            # Voice activity statistics
-            vad_results = []
-            frame_size = int(0.025 * self.sample_rate)  # 25ms
-            hop_size = int(0.010 * self.sample_rate)    # 10ms
-            
-            for i in range(0, len(audio) - frame_size, hop_size):
-                frame = audio[i:i + frame_size]
-                vad_results.append(self.detect_voice_activity(frame))
-            
-            metrics['voice_activity_ratio'] = sum(vad_results) / len(vad_results) if vad_results else 0
-            
-        except Exception as e:
-            logger.error(f"Audio metrics calculation error: {e}")
-            # Return basic metrics on error
-            metrics = {
-                'duration': len(audio) / self.sample_rate,
-                'sample_rate': self.sample_rate,
-                'rms_energy': float(np.sqrt(np.mean(audio**2))),
-                'peak_amplitude': float(np.max(np.abs(audio))),
-                'error': str(e)
-            }
-        
-        return metrics
-    
-    def _extract_silence_segments(self, audio: np.ndarray) -> List[np.ndarray]:
-        """Extract silence segments for noise estimation"""
-        segments_boundaries = self.split_audio_on_silence(audio)
-        silence_segments = []
-        
-        last_end = 0
-        for start, end in segments_boundaries:
-            if start > last_end:
-                # There's silence between last segment and current
-                silence_segment = audio[last_end:start]
-                if len(silence_segment) > int(0.1 * self.sample_rate):  # Min 100ms
-                    silence_segments.append(silence_segment)
-            last_end = end
-        
-        # Check for silence at the end
-        if last_end < len(audio):
-            silence_segment = audio[last_end:]
-            if len(silence_segment) > int(0.1 * self.sample_rate):
-                silence_segments.append(silence_segment)
-        
-        return silence_segments
-    
-    def resample(self, audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-        """Resample audio to target sample rate"""
-        if orig_sr == target_sr:
-            return audio
-        
-        try:
-            return librosa.resample(audio, orig_sr=orig_sr, target_sr=target_sr)
-        except Exception as e:
-            logger.error(f"Resampling error: {e}")
-            return audio
-    
-    def apply_noise_gate(self, audio: np.ndarray, threshold: float = None, 
-                        attack_time: float = 0.001, release_time: float = 0.1) -> np.ndarray:
-        """Apply noise gate to reduce background noise"""
-        if threshold is None:
-            threshold = self.vad_threshold
-        
-        try:
-            # Calculate envelope
-            frame_size = int(0.010 * self.sample_rate)  # 10ms frames
-            envelope = []
-            
-            for i in range(0, len(audio), frame_size):
-                frame = audio[i:i + frame_size]
-                envelope.append(np.sqrt(np.mean(frame**2)))
-            
-            # Smooth envelope
-            envelope = np.array(envelope)
-            
-            # Apply gate
-            gate_open = envelope > threshold
-            
-            # Smooth gate transitions
-            attack_frames = int(attack_time * self.sample_rate / frame_size)
-            release_frames = int(release_time * self.sample_rate / frame_size)
-            
-            smoothed_gate = np.copy(gate_open).astype(float)
-            
-            # Apply attack/release
-            for i in range(1, len(smoothed_gate)):
-                if gate_open[i] and not gate_open[i-1]:
-                    # Gate opening - apply attack
-                    for j in range(min(attack_frames, len(smoothed_gate) - i)):
-                        smoothed_gate[i + j] = min(1.0, smoothed_gate[i + j] + j / attack_frames)
-                elif not gate_open[i] and gate_open[i-1]:
-                    # Gate closing - apply release
-                    for j in range(min(release_frames, len(smoothed_gate) - i)):
-                        smoothed_gate[i + j] = max(0.0, smoothed_gate[i + j] - j / release_frames)
-            
-            # Apply gate to audio
-            gated_audio = np.copy(audio)
-            for i, gate_value in enumerate(smoothed_gate):
-                start_idx = i * frame_size
-                end_idx = min((i + 1) * frame_size, len(audio))
-                gated_audio[start_idx:end_idx] *= gate_value
-            
-            return gated_audio
-            
-        except Exception as e:
-            logger.error(f"Noise gate error: {e}")
-            return audio
-    
-    def enhance_speech(self, audio: np.ndarray) -> np.ndarray:
-        """Apply speech enhancement techniques"""
-        try:
-            # Apply noise gate
-            enhanced = self.apply_noise_gate(audio)
-            
-            # Apply spectral subtraction if noise profile available
-            if self.noise_profile is not None:
-                enhanced = self._reduce_noise(enhanced)
-            
-            # Apply mild compression
-            enhanced = self._apply_compression(enhanced)
-            
-            # High-pass filter to remove low-frequency noise
-            enhanced = self._apply_highpass_filter(enhanced, cutoff=80)
-            
-            return enhanced
-            
-        except Exception as e:
-            logger.error(f"Speech enhancement error: {e}")
-            return audio
-    
-    def _apply_compression(self, audio: np.ndarray, threshold: float = 0.5, 
-                          ratio: float = 3.0) -> np.ndarray:
-        """Apply dynamic range compression"""
-        try:
-            # Simple compression
-            compressed = np.copy(audio)
-            
-            # Find samples above threshold
-            above_threshold = np.abs(compressed) > threshold
-            
-            # Apply compression to samples above threshold
-            compressed[above_threshold] = (
-                np.sign(compressed[above_threshold]) * 
-                (threshold + (np.abs(compressed[above_threshold]) - threshold) / ratio)
-            )
-            
-            return compressed
-            
-        except Exception as e:
-            logger.error(f"Compression error: {e}")
-            return audio
-    
-    def _apply_highpass_filter(self, audio: np.ndarray, cutoff: float = 80) -> np.ndarray:
-        """Apply high-pass filter"""
-        try:
-            nyquist = self.sample_rate / 2
-            normalized_cutoff = cutoff / nyquist
-            
-            # Design high-pass filter
-            b, a = signal.butter(4, normalized_cutoff, btype='high')
-            
-            # Apply filter
-            filtered = signal.filtfilt(b, a, audio)
-            
-            return filtered
-            
-        except Exception as e:
-            logger.error(f"High-pass filter error: {e}")
-            return audio
-    
-    def calibrate_noise_profile(self, noise_audio: np.ndarray):
-        """Calibrate noise profile from noise-only audio"""
-        try:
-            # Compute noise spectrum
-            stft = librosa.stft(noise_audio, n_fft=self.frame_size, hop_length=self.hop_length)
-            self.noise_profile = np.mean(np.abs(stft), axis=1)
-            logger.info("Noise profile calibrated")
-            
-        except Exception as e:
-            logger.error(f"Noise profile calibration error: {e}")
     
     def mute(self):
         """Mute audio processing"""

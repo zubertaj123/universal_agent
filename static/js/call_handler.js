@@ -15,6 +15,7 @@ class CallHandler {
         this.audioChunks = [];
         this.startTime = null;
         this.durationInterval = null;
+        this.connectionReady = false;
     }
 
     async initialize() {
@@ -28,10 +29,10 @@ class CallHandler {
         try {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             
-            // Setup WebSocket connection
-            this.connectWebSocket();
+            // Setup WebSocket connection first
+            await this.connectWebSocket();
             
-            // Setup audio recording
+            // Setup audio recording only after WebSocket is ready
             this.setupAudioRecording();
             
             // Start duration timer
@@ -46,33 +47,46 @@ class CallHandler {
         }
     }
 
-    connectWebSocket() {
-
-        const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
-        const wsUrl = `${wsScheme}://${window.location.host}/ws/call/${this.sessionId}`;
-        this.ws = new WebSocket(wsUrl);
-        
-        this.ws.onopen = () => {
-            this.isConnected = true;
-            this.updateStatus('Connected');
-            console.log('WebSocket connected');
-        };
-        
-        this.ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            this.handleWebSocketMessage(data);
-        };
-        
-        this.ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            this.updateStatus('Connection error');
-        };
-        
-        this.ws.onclose = () => {
-            this.isConnected = false;
-            this.updateStatus('Disconnected');
-            this.stopDurationTimer();
-        };
+    async connectWebSocket() {
+        // Return a promise that resolves when WebSocket is ready
+        return new Promise((resolve, reject) => {
+            const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
+            const wsUrl = `${wsScheme}://${window.location.host}/ws/call/${this.sessionId}`;
+            this.ws = new WebSocket(wsUrl);
+            
+            this.ws.onopen = () => {
+                this.isConnected = true;
+                this.connectionReady = true;
+                this.updateStatus('Connected');
+                console.log('WebSocket connected');
+                resolve(); // Resolve the promise when connection is ready
+            };
+            
+            this.ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                this.handleWebSocketMessage(data);
+            };
+            
+            this.ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                this.updateStatus('Connection error');
+                reject(error);
+            };
+            
+            this.ws.onclose = () => {
+                this.isConnected = false;
+                this.connectionReady = false;
+                this.updateStatus('Disconnected');
+                this.stopDurationTimer();
+            };
+            
+            // Set a timeout in case connection takes too long
+            setTimeout(() => {
+                if (!this.connectionReady) {
+                    reject(new Error('WebSocket connection timeout'));
+                }
+            }, 10000); // 10 second timeout
+        });
     }
 
     setupAudioRecording() {
@@ -86,14 +100,17 @@ class CallHandler {
                         .map(b => b.toString(16).padStart(2, '0'))
                         .join('');
                     
-                    // ✅ Safely send only when WebSocket is ready
-                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    // Only send when WebSocket is ready and connected
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.connectionReady) {
                         this.ws.send(JSON.stringify({
                             type: 'audio',
                             data: hexString
                         }));
                     } else {
-                        console.warn('WebSocket not ready. Skipped sending audio chunk.');
+                        // Don't log every skipped chunk to avoid spam
+                        if (Math.random() < 0.01) { // Log ~1% of skipped chunks
+                            console.warn('WebSocket not ready. Skipping audio chunk.');
+                        }
                     }
                 });
             }
@@ -194,18 +211,26 @@ class CallHandler {
     }
 
     async playAudio(hexData) {
-        // Convert hex string back to array buffer
-        const bytes = new Uint8Array(hexData.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-        const audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer);
-        
-        const source = this.audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.audioContext.destination);
-        source.start();
+        try {
+            // Convert hex string back to array buffer
+            const bytes = new Uint8Array(hexData.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+            const audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer);
+            
+            const source = this.audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(this.audioContext.destination);
+            source.start();
+        } catch (error) {
+            console.warn('Audio playback error:', error);
+            // Don't show error to user for audio playback issues
+        }
     }
 
     updateStatus(status) {
-        document.getElementById('call-status').textContent = status;
+        const statusElement = document.getElementById('call-status');
+        if (statusElement) {
+            statusElement.textContent = status;
+        }
     }
 
     startDurationTimer() {
@@ -216,8 +241,11 @@ class CallHandler {
             const minutes = Math.floor(elapsed / 60000);
             const seconds = Math.floor((elapsed % 60000) / 1000);
             
-            document.getElementById('call-duration').textContent = 
-                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            const durationElement = document.getElementById('call-duration');
+            if (durationElement) {
+                durationElement.textContent = 
+                    `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
         }, 1000);
     }
 
@@ -234,9 +262,12 @@ class CallHandler {
 
     toggleMute() {
         this.isMuted = !this.isMuted;
-        document.getElementById('mute-btn').textContent = this.isMuted ? '🔇 Unmute' : '🎤 Mute';
+        const muteBtn = document.getElementById('mute-btn');
+        if (muteBtn) {
+            muteBtn.textContent = this.isMuted ? '🔇 Unmute' : '🎤 Mute';
+        }
         
-        if (this.isConnected) {
+        if (this.isConnected && this.connectionReady) {
             this.ws.send(JSON.stringify({
                 type: 'control',
                 action: this.isMuted ? 'mute' : 'unmute'
@@ -246,9 +277,12 @@ class CallHandler {
 
     togglePause() {
         this.isPaused = !this.isPaused;
-        document.getElementById('pause-btn').textContent = this.isPaused ? '▶️ Resume' : '⏸️ Pause';
+        const pauseBtn = document.getElementById('pause-btn');
+        if (pauseBtn) {
+            pauseBtn.textContent = this.isPaused ? '▶️ Resume' : '⏸️ Pause';
+        }
         
-        if (this.isConnected) {
+        if (this.isConnected && this.connectionReady) {
             this.ws.send(JSON.stringify({
                 type: 'control',
                 action: this.isPaused ? 'pause' : 'resume'
@@ -257,7 +291,7 @@ class CallHandler {
     }
 
     transferToHuman() {
-        if (this.isConnected) {
+        if (this.isConnected && this.connectionReady) {
             this.ws.send(JSON.stringify({
                 type: 'transfer',
                 reason: 'User requested human agent'
@@ -268,7 +302,7 @@ class CallHandler {
     }
 
     endCall() {
-        if (this.isConnected) {
+        if (this.isConnected && this.connectionReady) {
             this.ws.send(JSON.stringify({
                 type: 'end_call'
             }));
@@ -302,7 +336,7 @@ let callHandler;
 document.addEventListener('DOMContentLoaded', () => {
     if (window.location.pathname === '/call') {
         callHandler = new CallHandler();
-        callHandler.initialize();
+        // Don't auto-initialize, wait for user to click start
     }
 });
 

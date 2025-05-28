@@ -1,5 +1,5 @@
 /**
- * Fixed Call Handler - Complete audio processing and WebSocket communication
+ * Fixed Call Handler - WebSocket Connection Issues Resolved
  */
 
 // Global call handler instance
@@ -44,7 +44,7 @@ class CallHandler {
             console.log('🎤 Requesting microphone access...');
             await this.requestMicrophoneAccess();
             
-            // Step 3: Setup WebSocket connection
+            // Step 3: Setup WebSocket connection (FIXED)
             console.log('🔌 Setting up WebSocket connection...');
             await this.connectWebSocket();
             
@@ -116,20 +116,35 @@ class CallHandler {
 
     async connectWebSocket() {
         return new Promise((resolve, reject) => {
-            // Fix the WebSocket URL construction
-            const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-            const host = window.location.hostname === "0.0.0.0" ? "localhost" : window.location.hostname;
-            const port = window.location.port;
-            const wsUrl = `${protocol}//${host}:${port}/ws/call/${this.sessionId}`;
+            // FIXED: Simplified and more reliable WebSocket URL construction
+            const wsUrl = this.buildWebSocketUrl();
             
             console.log('Connecting to WebSocket:', wsUrl);
+            console.log('Location details:', {
+                protocol: window.location.protocol,
+                hostname: window.location.hostname, 
+                host: window.location.host,
+                port: window.location.port
+            });
+            
             this.ws = new WebSocket(wsUrl);
+            
+            // Set binary type for audio data
+            this.ws.binaryType = 'arraybuffer';
             
             this.ws.onopen = () => {
                 this.isConnected = true;
                 this.connectionReady = true;
                 this.updateStatus('Connected');
-                console.log('✅ WebSocket connected successfully');
+                console.log('✅ WebSocket connected successfully to:', wsUrl);
+                
+                // Send initial connection message
+                this.sendMessage({
+                    type: 'connection',
+                    sessionId: this.sessionId,
+                    timestamp: new Date().toISOString()
+                });
+                
                 resolve();
             };
             
@@ -139,30 +154,84 @@ class CallHandler {
                     this.handleWebSocketMessage(data);
                 } catch (error) {
                     console.error('Error parsing WebSocket message:', error);
+                    console.log('Raw message:', event.data);
                 }
             };
             
             this.ws.onerror = (error) => {
                 console.error('❌ WebSocket error:', error);
+                console.log('WebSocket state:', this.ws?.readyState);
                 this.updateStatus('Connection error');
-                reject(new Error('WebSocket connection failed'));
+                reject(new Error(`WebSocket connection failed: ${error.message || 'Unknown error'}`));
             };
             
             this.ws.onclose = (event) => {
                 this.isConnected = false;
                 this.connectionReady = false;
-                console.log('WebSocket closed:', event.code, event.reason);
+                console.log('WebSocket closed:', {
+                    code: event.code,
+                    reason: event.reason,
+                    wasClean: event.wasClean
+                });
+                
+                // Handle different close codes
+                if (event.code === 1006) {
+                    console.error('WebSocket closed abnormally - possible server issue');
+                } else if (event.code === 1011) {
+                    console.error('WebSocket closed due to server error');
+                }
+                
                 this.updateStatus('Disconnected');
                 this.stopDurationTimer();
             };
             
-            // Set connection timeout
-            setTimeout(() => {
+            // FIXED: Increased timeout and better error handling
+            const connectionTimeout = setTimeout(() => {
                 if (!this.connectionReady) {
-                    reject(new Error('WebSocket connection timeout'));
+                    console.error('WebSocket connection timeout');
+                    if (this.ws) {
+                        this.ws.close();
+                    }
+                    reject(new Error('WebSocket connection timeout - server may be unreachable'));
                 }
-            }, 10000);
+            }, 15000); // Increased to 15 seconds
+            
+            // Clear timeout on successful connection
+            this.ws.addEventListener('open', () => {
+                clearTimeout(connectionTimeout);
+            });
         });
+    }
+
+    // FIXED: More reliable WebSocket URL construction
+    buildWebSocketUrl() {
+        // Use the current page's protocol and host
+        const isSecure = window.location.protocol === 'https:';
+        const wsProtocol = isSecure ? 'wss:' : 'ws:';
+        
+        // Use window.location.host which includes port automatically
+        const host = window.location.host;
+        
+        // Construct the full WebSocket URL
+        const wsUrl = `${wsProtocol}//${host}/ws/call/${this.sessionId}`;
+        
+        return wsUrl;
+    }
+
+    // FIXED: Better message sending with error handling
+    sendMessage(message) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try {
+                this.ws.send(JSON.stringify(message));
+                return true;
+            } catch (error) {
+                console.error('Error sending WebSocket message:', error);
+                return false;
+            }
+        } else {
+            console.warn('WebSocket not connected, cannot send message:', message.type);
+            return false;
+        }
     }
 
     async setupAudioProcessing() {
@@ -220,29 +289,23 @@ class CallHandler {
                     .map(b => b.toString(16).padStart(2, '0'))
                     .join('');
                 
-                // Send via WebSocket with error handling
-                if (this.ws && this.ws.readyState === WebSocket.OPEN && this.connectionReady) {
-                    try {
-                        this.ws.send(JSON.stringify({
-                            type: 'audio',
-                            data: hexString,
-                            format: 'pcm16',
-                            sampleRate: this.audioContext.sampleRate,
-                            channels: 1
-                        }));
-                        
-                        if (this.debugMode && Math.random() < 0.01) {
-                            console.log('📤 Sent audio chunk:', {
-                                size: pcmData.length,
-                                sampleRate: this.audioContext.sampleRate,
-                                hasAudio: this.hasSignificantAudio(audioData)
-                            });
-                        }
-                    } catch (error) {
-                        console.error('Error sending audio data:', error);
-                    }
-                } else if (this.debugMode && Math.random() < 0.001) {
-                    console.warn('WebSocket not ready, skipping audio chunk');
+                // FIXED: Use the new sendMessage method
+                const success = this.sendMessage({
+                    type: 'audio',
+                    data: hexString,
+                    format: 'pcm16',
+                    sampleRate: this.audioContext.sampleRate,
+                    channels: 1,
+                    timestamp: Date.now()
+                });
+                
+                if (this.debugMode && Math.random() < 0.01) {
+                    console.log('📤 Sent audio chunk:', {
+                        success,
+                        size: pcmData.length,
+                        sampleRate: this.audioContext.sampleRate,
+                        hasAudio: this.hasSignificantAudio(audioData)
+                    });
                 }
             }
         } catch (error) {
@@ -312,14 +375,14 @@ class CallHandler {
                             .map(b => b.toString(16).padStart(2, '0'))
                             .join('');
                         
-                        if (this.ws && this.ws.readyState === WebSocket.OPEN && this.connectionReady) {
-                            this.ws.send(JSON.stringify({
-                                type: 'audio',
-                                data: hexString,
-                                format: this.mediaRecorder.mimeType,
-                                fallback: true
-                            }));
-                        }
+                        // FIXED: Use the new sendMessage method
+                        this.sendMessage({
+                            type: 'audio',
+                            data: hexString,
+                            format: this.mediaRecorder.mimeType,
+                            fallback: true,
+                            timestamp: Date.now()
+                        });
                     }).catch(error => {
                         console.error('Error processing MediaRecorder data:', error);
                     });
@@ -398,6 +461,8 @@ class CallHandler {
 
     handleWebSocketMessage(data) {
         try {
+            console.log('📨 Received WebSocket message:', data.type);
+            
             switch (data.type) {
                 case 'transcript':
                     this.addTranscript(data.speaker, data.text);
@@ -524,8 +589,9 @@ class CallHandler {
         }
     }
 
+    // FIXED: Simpler session ID generation
     generateSessionId() {
-        return 'call-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
     }
 
     toggleMute() {
@@ -535,12 +601,10 @@ class CallHandler {
             muteBtn.textContent = this.isMuted ? '🔇 Unmute' : '🎤 Mute';
         }
         
-        if (this.isConnected && this.connectionReady) {
-            this.ws.send(JSON.stringify({
-                type: 'control',
-                action: this.isMuted ? 'mute' : 'unmute'
-            }));
-        }
+        this.sendMessage({
+            type: 'control',
+            action: this.isMuted ? 'mute' : 'unmute'
+        });
         
         console.log('🔇 Mute toggled:', this.isMuted);
     }
@@ -552,25 +616,21 @@ class CallHandler {
             pauseBtn.textContent = this.isPaused ? '▶️ Resume' : '⏸️ Pause';
         }
         
-        if (this.isConnected && this.connectionReady) {
-            this.ws.send(JSON.stringify({
-                type: 'control',
-                action: this.isPaused ? 'pause' : 'resume'
-            }));
-        }
+        this.sendMessage({
+            type: 'control',
+            action: this.isPaused ? 'pause' : 'resume'
+        });
         
         console.log('⏸️ Pause toggled:', this.isPaused);
     }
 
     transferToHuman() {
-        if (this.isConnected && this.connectionReady) {
-            this.ws.send(JSON.stringify({
-                type: 'transfer',
-                reason: 'User requested human agent'
-            }));
-            
-            this.updateStatus('Transferring to human agent...');
-        }
+        this.sendMessage({
+            type: 'transfer',
+            reason: 'User requested human agent'
+        });
+        
+        this.updateStatus('Transferring to human agent...');
     }
 
     endCall() {
@@ -617,15 +677,9 @@ class CallHandler {
         }
         
         // Send end call message
-        if (this.isConnected && this.connectionReady) {
-            try {
-                this.ws.send(JSON.stringify({
-                    type: 'end_call'
-                }));
-            } catch (error) {
-                console.error('Error sending end call message:', error);
-            }
-        }
+        this.sendMessage({
+            type: 'end_call'
+        });
         
         // Close WebSocket
         if (this.ws) {
@@ -650,14 +704,20 @@ class CallHandler {
         console.log('🐛 Debug mode enabled');
     }
 
-    // Get current session statistics
+    // FIXED: More comprehensive session statistics
     getSessionStats() {
         return {
             sessionId: this.sessionId,
             isConnected: this.isConnected,
+            connectionReady: this.connectionReady,
             isRecording: this.isRecording,
             isMuted: this.isMuted,
             isPaused: this.isPaused,
+            websocket: {
+                readyState: this.ws?.readyState,
+                url: this.ws?.url,
+                protocol: this.ws?.protocol
+            },
             audioContext: {
                 state: this.audioContext?.state,
                 sampleRate: this.audioContext?.sampleRate
@@ -674,8 +734,6 @@ class CallHandler {
 async function startCall() {
     console.log('🎯 Start call clicked');
     console.log('Current location:', window.location.href);
-    console.log('Protocol:', window.location.protocol);
-    console.log('Host:', window.location.host);
     
     // Initialize call handler if not already done
     if (!callHandler) {
@@ -705,8 +763,8 @@ async function startCall() {
         if (error.message.includes('Permission denied')) {
             errorMessage = 'Microphone access denied. Please allow microphone access and try again.';
             showMicrophoneInstructions();
-        } else if (error.message.includes('WebSocket')) {
-            errorMessage = 'Connection failed. Please check your internet connection and try again.';
+        } else if (error.message.includes('WebSocket') || error.message.includes('timeout')) {
+            errorMessage = 'Connection failed. Please check your server is running and try again.';
         } else {
             errorMessage = `Error: ${error.message}`;
         }
@@ -782,7 +840,7 @@ function showMicrophoneInstructions() {
         4. Refresh this page and try again<br><br>
         
         <strong>For HTTPS issues:</strong><br>
-        • Make sure you're accessing via https://localhost:8000<br>
+        • Make sure you're accessing via https:// if available<br>
         • Accept the security certificate if prompted<br><br>
         
         <button onclick="this.parentElement.remove()" style="background: white; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px;">Got it!</button>
@@ -846,3 +904,31 @@ window.addEventListener('beforeunload', (event) => {
         callHandler.endCall();
     }
 });
+
+// Test WebSocket connection function for debugging
+async function testWebSocketConnection() {
+    console.log('🧪 Testing WebSocket connection...');
+    
+    const wsUrl = new CallHandler().buildWebSocketUrl();
+    console.log('Testing URL:', wsUrl);
+    
+    try {
+        const testWs = new WebSocket(wsUrl);
+        
+        testWs.onopen = () => {
+            console.log('✅ Test WebSocket connection successful');
+            testWs.close();
+        };
+        
+        testWs.onerror = (error) => {
+            console.error('❌ Test WebSocket connection failed:', error);
+        };
+        
+        testWs.onclose = (event) => {
+            console.log('Test WebSocket closed:', event.code, event.reason);
+        };
+        
+    } catch (error) {
+        console.error('❌ Failed to create test WebSocket:', error);
+    }
+}

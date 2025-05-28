@@ -58,16 +58,7 @@ class AudioProcessor:
     def _try_decode_strategies(self, audio_data: bytes) -> Optional[np.ndarray]:
         """Try multiple decoding strategies in order of preference"""
         
-        # Strategy 1: Try to detect and decode WebM/Opus format
-        try:
-            result = self._decode_webm_opus(audio_data)
-            if result is not None and len(result) > 0:
-                logger.debug("Successfully decoded as WebM/Opus")
-                return result
-        except Exception as e:
-            logger.debug(f"WebM/Opus decoding failed: {e}")
-        
-        # Strategy 2: Try to decode as raw PCM (common for MediaRecorder)
+        # Strategy 1: Try to decode as raw PCM (most common for browser)
         try:
             result = self._decode_raw_pcm(audio_data)
             if result is not None and len(result) > 0:
@@ -76,16 +67,7 @@ class AudioProcessor:
         except Exception as e:
             logger.debug(f"Raw PCM decoding failed: {e}")
         
-        # Strategy 3: Try FFmpeg with format auto-detection
-        try:
-            result = self._decode_with_ffmpeg_auto(audio_data)
-            if result is not None and len(result) > 0:
-                logger.debug("Successfully decoded with FFmpeg auto-detection")
-                return result
-        except Exception as e:
-            logger.debug(f"FFmpeg auto-detection failed: {e}")
-        
-        # Strategy 4: Try as WAV format
+        # Strategy 2: Try as WAV format
         try:
             result = self._decode_wav_format(audio_data)
             if result is not None and len(result) > 0:
@@ -94,53 +76,16 @@ class AudioProcessor:
         except Exception as e:
             logger.debug(f"WAV decoding failed: {e}")
         
-        # Strategy 5: Generate placeholder audio for demo purposes
+        # Strategy 3: Generate placeholder audio for demo purposes
         logger.warning("All decoding strategies failed, generating placeholder audio")
         return self._generate_placeholder_audio()
 
     def _decode_webm_opus(self, audio_data: bytes) -> Optional[np.ndarray]:
-        """Decode WebM/Opus format using FFmpeg"""
+        """Decode WebM/Opus format using FFmpeg with improved error handling"""
         try:
-            # Create temporary files
-            with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_input:
-                temp_input.write(audio_data)
-                temp_input_path = temp_input.name
-            
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_output:
-                temp_output_path = temp_output.name
-            
-            try:
-                # FFmpeg command for WebM/Opus input
-                cmd = [
-                    'ffmpeg', '-y',
-                    '-i', temp_input_path,
-                    '-f', 'wav',
-                    '-ac', '1',  # mono
-                    '-ar', str(self.sample_rate),
-                    '-acodec', 'pcm_s16le',
-                    temp_output_path
-                ]
-                
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=10,
-                    check=True
-                )
-                
-                # Read the converted WAV file
-                with wave.open(temp_output_path, 'rb') as wav_file:
-                    frames = wav_file.readframes(wav_file.getnframes())
-                    audio_array = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-                    return audio_array
-                    
-            finally:
-                # Clean up temporary files
-                if os.path.exists(temp_input_path):
-                    os.unlink(temp_input_path)
-                if os.path.exists(temp_output_path):
-                    os.unlink(temp_output_path)
-                    
+            # Skip FFmpeg for now due to format issues
+            logger.debug("Skipping WebM/Opus decoding to avoid FFmpeg errors")
+            return None
         except Exception as e:
             logger.debug(f"WebM/Opus decoding failed: {e}")
             return None

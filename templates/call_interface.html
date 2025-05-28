@@ -29,15 +29,14 @@
                 </div>
             </div>
             
-    <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin: 16px 0;">
-        <h3 style="color: #92400e; margin: 0 0 8px 0;">🚧 Demo Mode</h3>
-        <p style="color: #92400e; margin: 0; font-size: 14px;">
-            This is running in demo mode with simulated audio processing. 
-            Real microphone input is not being processed yet. 
-            The AI will still respond with text-to-speech.
-        </p>
-    </div>
-    
+            <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin: 16px 0;">
+                <h3 style="color: #92400e; margin: 0 0 8px 0;">🎤 Voice Call Instructions</h3>
+                <p style="color: #92400e; margin: 0; font-size: 14px;">
+                    Click "Start Call" below and allow microphone access when prompted. 
+                    The AI will process your speech and respond with text-to-speech.
+                </p>
+            </div>
+            
             <div class="audio-visualizer">
                 <canvas id="audio-canvas" width="400" height="100"></canvas>
             </div>
@@ -71,10 +70,27 @@
         </div>
     </div>
     
+    <!-- Load the CallHandler class first -->
     <script src="/static/js/call_handler.js"></script>
     
     <script>
-        // Additional functions for the call interface
+        // Global call handler instance
+        let callHandler = null;
+        
+        // Initialize call handler when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('Page loaded, initializing call handler...');
+            
+            // Show initial instructions
+            setTimeout(() => {
+                const status = document.getElementById('call-status');
+                if (status && status.textContent === 'Ready to start') {
+                    status.textContent = 'Click "Start Call" to begin';
+                }
+            }, 1000);
+        });
+        
+        // Call interface functions
         async function startCall() {
             console.log('Start call clicked');
             console.log('Current location:', window.location.href);
@@ -83,7 +99,9 @@
             console.log('Hostname:', window.location.hostname);
             console.log('Port:', window.location.port);
             
+            // Initialize call handler if not already done
             if (!callHandler) {
+                console.log('Creating new CallHandler instance...');
                 callHandler = new CallHandler();
             }
             
@@ -98,9 +116,24 @@
             document.getElementById('call-status').textContent = 'Starting...';
             
             try {
+                console.log('Initializing call handler...');
                 await callHandler.initialize();
+                console.log('Call handler initialized successfully');
             } catch (error) {
                 console.error('Failed to start call:', error);
+                
+                // Show detailed error message to user
+                let errorMessage = 'Failed to start call';
+                if (error.message.includes('Permission denied')) {
+                    errorMessage = 'Microphone access denied. Please allow microphone access and try again.';
+                    showMicrophoneInstructions();
+                } else if (error.message.includes('WebSocket')) {
+                    errorMessage = 'Connection failed. Please check your internet connection and try again.';
+                } else {
+                    errorMessage = `Error: ${error.message}`;
+                }
+                
+                document.getElementById('call-status').textContent = errorMessage;
                 
                 // Show start button again on error
                 document.getElementById('start-call-btn').style.display = 'inline-block';
@@ -108,8 +141,40 @@
                 document.getElementById('pause-btn').style.display = 'none';
                 document.getElementById('transfer-btn').style.display = 'none';
                 document.getElementById('end-call-btn').style.display = 'none';
-                
-                document.getElementById('call-status').textContent = 'Failed to start - Click to retry';
+            }
+        }
+        
+        function toggleMute() {
+            if (callHandler) {
+                callHandler.toggleMute();
+            } else {
+                console.warn('Call handler not initialized');
+            }
+        }
+        
+        function togglePause() {
+            if (callHandler) {
+                callHandler.togglePause();
+            } else {
+                console.warn('Call handler not initialized');
+            }
+        }
+        
+        function transferToHuman() {
+            if (callHandler) {
+                callHandler.transferToHuman();
+            } else {
+                console.warn('Call handler not initialized');
+            }
+        }
+        
+        function endCall() {
+            if (callHandler) {
+                callHandler.endCall();
+            } else {
+                console.warn('Call handler not initialized');
+                // Fallback - just redirect to home
+                window.location.href = '/';
             }
         }
         
@@ -120,38 +185,84 @@
                 top: 20px;
                 left: 50%;
                 transform: translateX(-50%);
-                background: #2563eb;
+                background: #dc2626;
                 color: white;
                 padding: 20px;
                 border-radius: 10px;
                 z-index: 1000;
-                max-width: 400px;
+                max-width: 500px;
                 text-align: center;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.3);
             `;
             instructions.innerHTML = `
-                <div style="font-size: 20px; margin-bottom: 10px;">🎤</div>
+                <div style="font-size: 24px; margin-bottom: 10px;">🎤</div>
                 <strong>Microphone Access Required</strong><br><br>
                 To use voice calls, please:<br>
                 1. Look for the microphone icon 🎤 in your browser's address bar<br>
                 2. Click it and select "Allow"<br>
-                3. Or click the 🔒 lock icon → Permissions → Microphone → Allow<br>
+                3. Or click the 🔒 lock icon → Site Settings → Microphone → Allow<br>
                 4. Refresh this page and try again<br><br>
-                <button onclick="this.parentElement.remove()" style="background: white; color: #2563eb; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold;">Got it!</button>
+                
+                <strong>For HTTPS issues:</strong><br>
+                • Make sure you're accessing via https://localhost:8000<br>
+                • Accept the security certificate if prompted<br><br>
+                
+                <button onclick="this.parentElement.remove()" style="background: white; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px;">Got it!</button>
             `;
             document.body.appendChild(instructions);
             
-            // Auto-remove after 15 seconds
+            // Auto-remove after 20 seconds
             setTimeout(() => {
                 if (instructions.parentElement) {
                     instructions.remove();
                 }
-            }, 15000);
+            }, 20000);
         }
         
-        // Show instructions immediately when page loads
+        // Debug function to check call handler status
+        function checkCallHandler() {
+            if (callHandler) {
+                console.log('Call Handler Status:', callHandler.getSessionStats());
+            } else {
+                console.log('Call handler not initialized');
+            }
+        }
+        
+        // Add keyboard shortcuts
+        document.addEventListener('keydown', (event) => {
+            if (event.altKey) {
+                switch(event.code) {
+                    case 'KeyM':
+                        event.preventDefault();
+                        toggleMute();
+                        break;
+                    case 'KeyP':
+                        event.preventDefault();
+                        togglePause();
+                        break;
+                    case 'KeyE':
+                        event.preventDefault();
+                        endCall();
+                        break;
+                }
+            }
+        });
+        
+        // Handle page unload
+        window.addEventListener('beforeunload', (event) => {
+            if (callHandler && callHandler.isConnected) {
+                // Try to end call gracefully
+                callHandler.endCall();
+            }
+        });
+    </script>
+    <script>
+        
+        // Initialize when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            // Show a brief instruction
+            console.log('Page loaded, call handler will be initialized when start call is clicked');
+            
+            // Show initial instructions
             setTimeout(() => {
                 const status = document.getElementById('call-status');
                 if (status && status.textContent === 'Ready to start') {

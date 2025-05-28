@@ -1,6 +1,9 @@
 /**
- * Fixed Call Handler - Improved audio processing and WebSocket communication
+ * Fixed Call Handler - Complete audio processing and WebSocket communication
  */
+
+// Global call handler instance
+let callHandler = null;
 
 class CallHandler {
     constructor() {
@@ -19,27 +22,69 @@ class CallHandler {
         
         // Audio processing parameters
         this.targetSampleRate = 16000;
-        this.chunkSize = 1024; // Process in 1KB chunks
+        this.chunkSize = 1024;
         this.audioWorkletNode = null;
         this.isRecording = false;
         this.debugMode = false;
     }
 
     async initialize() {
+        console.log('🚀 Initializing Call Handler...');
+        
         // Generate session ID
         this.sessionId = this.generateSessionId();
+        console.log('Generated session ID:', this.sessionId);
         
-        // Initialize audio context with target sample rate
         try {
+            // Step 1: Initialize audio context
+            console.log('🎵 Initializing audio context...');
+            await this.initializeAudioContext();
+            
+            // Step 2: Request microphone access
+            console.log('🎤 Requesting microphone access...');
+            await this.requestMicrophoneAccess();
+            
+            // Step 3: Setup WebSocket connection
+            console.log('🔌 Setting up WebSocket connection...');
+            await this.connectWebSocket();
+            
+            // Step 4: Setup audio processing
+            console.log('🔊 Setting up audio processing...');
+            await this.setupAudioProcessing();
+            
+            // Step 5: Start duration timer
+            this.startDurationTimer();
+            
+            // Step 6: Update UI
+            this.updateStatus('Connected and Ready');
+            
+            console.log('✅ Call Handler initialized successfully');
+            
+        } catch (error) {
+            console.error('❌ Failed to initialize Call Handler:', error);
+            throw error;
+        }
+    }
+
+    async initializeAudioContext() {
+        try {
+            // Initialize audio context with target sample rate
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: this.targetSampleRate
             });
+            
+            console.log('Audio context initialized:', {
+                sampleRate: this.audioContext.sampleRate,
+                state: this.audioContext.state
+            });
+            
         } catch (error) {
             console.warn('Could not set target sample rate, using default');
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
         }
-        
-        // Request microphone access with specific constraints
+    }
+
+    async requestMicrophoneAccess() {
         try {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
@@ -53,32 +98,29 @@ class CallHandler {
             
             console.log('Media stream obtained:', {
                 sampleRate: this.audioContext.sampleRate,
-                channels: this.mediaStream.getAudioTracks()[0].getSettings()
+                tracks: this.mediaStream.getAudioTracks().length,
+                settings: this.mediaStream.getAudioTracks()[0].getSettings()
             });
             
-            // Setup WebSocket connection first
-            await this.connectWebSocket();
-            
-            // Setup improved audio processing
-            await this.setupImprovedAudioProcessing();
-            
-            // Start duration timer
-            this.startDurationTimer();
-            
-            // Update UI
-            this.updateStatus('Connected');
-            
         } catch (error) {
-            console.error('Error accessing microphone:', error);
-            this.updateStatus('Microphone access denied');
-            throw error;
+            console.error('Microphone access error:', error);
+            if (error.name === 'NotAllowedError') {
+                throw new Error('Permission denied: Microphone access was denied by the user');
+            } else if (error.name === 'NotFoundError') {
+                throw new Error('No microphone found: Please connect a microphone and try again');
+            } else {
+                throw new Error(`Microphone error: ${error.message}`);
+            }
         }
     }
 
     async connectWebSocket() {
         return new Promise((resolve, reject) => {
-            const wsScheme = window.location.protocol === "https:" ? "wss" : "ws";
-            const wsUrl = `${wsScheme}://${window.location.host}/ws/call/${this.sessionId}`;
+            // Fix the WebSocket URL construction
+            const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+            const host = window.location.hostname === "0.0.0.0" ? "localhost" : window.location.hostname;
+            const port = window.location.port;
+            const wsUrl = `${protocol}//${host}:${port}/ws/call/${this.sessionId}`;
             
             console.log('Connecting to WebSocket:', wsUrl);
             this.ws = new WebSocket(wsUrl);
@@ -87,7 +129,7 @@ class CallHandler {
                 this.isConnected = true;
                 this.connectionReady = true;
                 this.updateStatus('Connected');
-                console.log('WebSocket connected successfully');
+                console.log('✅ WebSocket connected successfully');
                 resolve();
             };
             
@@ -101,9 +143,9 @@ class CallHandler {
             };
             
             this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                console.error('❌ WebSocket error:', error);
                 this.updateStatus('Connection error');
-                reject(error);
+                reject(new Error('WebSocket connection failed'));
             };
             
             this.ws.onclose = (event) => {
@@ -123,14 +165,12 @@ class CallHandler {
         });
     }
 
-    async setupImprovedAudioProcessing() {
+    async setupAudioProcessing() {
         try {
             // Create audio source from media stream
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
             
             // Create script processor for real-time audio processing
-            // Note: ScriptProcessorNode is deprecated but widely supported
-            // In production, consider using AudioWorklet
             const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
             
             processor.onaudioprocess = (event) => {
@@ -159,12 +199,12 @@ class CallHandler {
             // Setup audio visualization
             this.setupAudioVisualization(source);
             
-            console.log('Improved audio processing setup complete');
+            console.log('✅ Audio processing setup complete');
             
         } catch (error) {
-            console.error('Error setting up audio processing:', error);
-            // Fallback to MediaRecorder if AudioWorklet fails
-            this.setupFallbackAudioRecording();
+            console.error('❌ Error setting up audio processing:', error);
+            // Fallback to MediaRecorder
+            await this.setupFallbackAudioRecording();
         }
     }
 
@@ -173,7 +213,7 @@ class CallHandler {
             // Convert Float32Array to 16-bit PCM
             const pcmData = this.convertToPCM16(audioData);
             
-            // Only send if we have a reasonable amount of audio data
+            // Only send if we have significant audio data
             if (pcmData.length > 0 && this.hasSignificantAudio(audioData)) {
                 // Convert to hex string for transmission
                 const hexString = Array.from(pcmData)
@@ -192,7 +232,7 @@ class CallHandler {
                         }));
                         
                         if (this.debugMode && Math.random() < 0.01) {
-                            console.log('Sent audio chunk:', {
+                            console.log('📤 Sent audio chunk:', {
                                 size: pcmData.length,
                                 sampleRate: this.audioContext.sampleRate,
                                 hasAudio: this.hasSignificantAudio(audioData)
@@ -235,8 +275,8 @@ class CallHandler {
         return rms > 0.001; // Threshold for significant audio
     }
 
-    setupFallbackAudioRecording() {
-        console.log('Setting up fallback MediaRecorder...');
+    async setupFallbackAudioRecording() {
+        console.log('🔄 Setting up fallback MediaRecorder...');
         
         try {
             // Configure MediaRecorder with optimal settings
@@ -290,12 +330,14 @@ class CallHandler {
                 console.error('MediaRecorder error:', error);
             };
             
-            // Start recording with small time slices for better real-time performance
+            // Start recording with small time slices
             this.mediaRecorder.start(100); // 100ms chunks
             this.isRecording = true;
             
+            console.log('✅ Fallback MediaRecorder setup complete');
+            
         } catch (error) {
-            console.error('Error setting up MediaRecorder fallback:', error);
+            console.error('❌ Error setting up MediaRecorder fallback:', error);
             this.updateStatus('Audio recording setup failed');
         }
     }
@@ -456,7 +498,7 @@ class CallHandler {
         if (statusElement) {
             statusElement.textContent = status;
         }
-        console.log('Status update:', status);
+        console.log('📊 Status update:', status);
     }
 
     startDurationTimer() {
@@ -500,7 +542,7 @@ class CallHandler {
             }));
         }
         
-        console.log('Mute toggled:', this.isMuted);
+        console.log('🔇 Mute toggled:', this.isMuted);
     }
 
     togglePause() {
@@ -517,7 +559,7 @@ class CallHandler {
             }));
         }
         
-        console.log('Pause toggled:', this.isPaused);
+        console.log('⏸️ Pause toggled:', this.isPaused);
     }
 
     transferToHuman() {
@@ -532,11 +574,12 @@ class CallHandler {
     }
 
     endCall() {
-        console.log('Ending call...');
+        console.log('📞 Ending call...');
         
         // Stop recording
         this.isRecording = false;
         
+        // Stop MediaRecorder if active
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             try {
                 this.mediaRecorder.stop();
@@ -604,7 +647,7 @@ class CallHandler {
     // Debug method to enable verbose logging
     enableDebugMode() {
         this.debugMode = true;
-        console.log('Debug mode enabled');
+        console.log('🐛 Debug mode enabled');
     }
 
     // Get current session statistics
@@ -626,3 +669,180 @@ class CallHandler {
         };
     }
 }
+
+// Global functions for call interface
+async function startCall() {
+    console.log('🎯 Start call clicked');
+    console.log('Current location:', window.location.href);
+    console.log('Protocol:', window.location.protocol);
+    console.log('Host:', window.location.host);
+    
+    // Initialize call handler if not already done
+    if (!callHandler) {
+        console.log('Creating new CallHandler instance...');
+        callHandler = new CallHandler();
+    }
+    
+    // Hide start button, show other controls
+    document.getElementById('start-call-btn').style.display = 'none';
+    document.getElementById('mute-btn').style.display = 'inline-block';
+    document.getElementById('pause-btn').style.display = 'inline-block';
+    document.getElementById('transfer-btn').style.display = 'inline-block';
+    document.getElementById('end-call-btn').style.display = 'inline-block';
+    
+    // Update status
+    document.getElementById('call-status').textContent = 'Starting...';
+    
+    try {
+        console.log('Initializing call handler...');
+        await callHandler.initialize();
+        console.log('✅ Call handler initialized successfully');
+    } catch (error) {
+        console.error('❌ Failed to start call:', error);
+        
+        // Show detailed error message to user
+        let errorMessage = 'Failed to start call';
+        if (error.message.includes('Permission denied')) {
+            errorMessage = 'Microphone access denied. Please allow microphone access and try again.';
+            showMicrophoneInstructions();
+        } else if (error.message.includes('WebSocket')) {
+            errorMessage = 'Connection failed. Please check your internet connection and try again.';
+        } else {
+            errorMessage = `Error: ${error.message}`;
+        }
+        
+        document.getElementById('call-status').textContent = errorMessage;
+        
+        // Show start button again on error
+        document.getElementById('start-call-btn').style.display = 'inline-block';
+        document.getElementById('mute-btn').style.display = 'none';
+        document.getElementById('pause-btn').style.display = 'none';
+        document.getElementById('transfer-btn').style.display = 'none';
+        document.getElementById('end-call-btn').style.display = 'none';
+    }
+}
+
+function toggleMute() {
+    if (callHandler) {
+        callHandler.toggleMute();
+    } else {
+        console.warn('Call handler not initialized');
+    }
+}
+
+function togglePause() {
+    if (callHandler) {
+        callHandler.togglePause();
+    } else {
+        console.warn('Call handler not initialized');
+    }
+}
+
+function transferToHuman() {
+    if (callHandler) {
+        callHandler.transferToHuman();
+    } else {
+        console.warn('Call handler not initialized');
+    }
+}
+
+function endCall() {
+    if (callHandler) {
+        callHandler.endCall();
+    } else {
+        console.warn('Call handler not initialized');
+        // Fallback - just redirect to home
+        window.location.href = '/';
+    }
+}
+
+function showMicrophoneInstructions() {
+    const instructions = document.createElement('div');
+    instructions.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #dc2626;
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        z-index: 1000;
+        max-width: 500px;
+        text-align: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    `;
+    instructions.innerHTML = `
+        <div style="font-size: 24px; margin-bottom: 10px;">🎤</div>
+        <strong>Microphone Access Required</strong><br><br>
+        To use voice calls, please:<br>
+        1. Look for the microphone icon 🎤 in your browser's address bar<br>
+        2. Click it and select "Allow"<br>
+        3. Or click the 🔒 lock icon → Site Settings → Microphone → Allow<br>
+        4. Refresh this page and try again<br><br>
+        
+        <strong>For HTTPS issues:</strong><br>
+        • Make sure you're accessing via https://localhost:8000<br>
+        • Accept the security certificate if prompted<br><br>
+        
+        <button onclick="this.parentElement.remove()" style="background: white; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px;">Got it!</button>
+    `;
+    document.body.appendChild(instructions);
+    
+    // Auto-remove after 20 seconds
+    setTimeout(() => {
+        if (instructions.parentElement) {
+            instructions.remove();
+        }
+    }, 20000);
+}
+
+// Debug function to check call handler status
+function checkCallHandler() {
+    if (callHandler) {
+        console.log('Call Handler Status:', callHandler.getSessionStats());
+    } else {
+        console.log('Call handler not initialized');
+    }
+}
+
+// Initialize when page loads
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('📄 Page loaded, call handler ready to initialize');
+    
+    // Show initial instructions
+    setTimeout(() => {
+        const status = document.getElementById('call-status');
+        if (status && status.textContent === 'Ready to start') {
+            status.textContent = 'Click "Start Call" to begin';
+        }
+    }, 1000);
+});
+
+// Add keyboard shortcuts
+document.addEventListener('keydown', (event) => {
+    if (event.altKey) {
+        switch(event.code) {
+            case 'KeyM':
+                event.preventDefault();
+                toggleMute();
+                break;
+            case 'KeyP':
+                event.preventDefault();
+                togglePause();
+                break;
+            case 'KeyE':
+                event.preventDefault();
+                endCall();
+                break;
+        }
+    }
+});
+
+// Handle page unload
+window.addEventListener('beforeunload', (event) => {
+    if (callHandler && callHandler.isConnected) {
+        // Try to end call gracefully
+        callHandler.endCall();
+    }
+});

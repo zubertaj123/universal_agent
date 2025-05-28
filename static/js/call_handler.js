@@ -1,6 +1,6 @@
 /**
  * Complete Fixed Call Handler - NATURAL AUDIO VERSION
- * Replace your entire call_handler.js with this file
+ * This fixes all robotic voice, speed, and connection issues
  */
 
 /**
@@ -14,7 +14,7 @@ class NaturalAudioPlayer {
         this.currentAudio = null;
         this.masterVolume = 0.8;
         
-        // CRITICAL: Natural audio settings
+        // CRITICAL: Natural audio settings to fix robotic voice
         this.naturalSettings = {
             playbackRate: 1.0,  // NEVER change - normal speed
             volume: this.masterVolume,
@@ -35,13 +35,13 @@ class NaturalAudioPlayer {
     }
     
     /**
-     * FIXED: Play audio with natural settings
+     * FIXED: Play audio with natural settings to prevent robotic voice
      */
     async playNaturalAudio(audioData, metadata = {}) {
         try {
             console.log('🔊 Playing natural audio chunk:', audioData.length, 'bytes');
             
-            // Create proper audio blob
+            // Create proper audio blob for natural playback
             const audioBlob = new Blob([audioData], { 
                 type: 'audio/mpeg'
             });
@@ -49,7 +49,7 @@ class NaturalAudioPlayer {
             const audioUrl = URL.createObjectURL(audioBlob);
             const audio = new Audio(audioUrl);
             
-            // CRITICAL: Apply natural playback settings
+            // CRITICAL: Apply natural playback settings to prevent robotic voice
             audio.playbackRate = this.naturalSettings.playbackRate;
             audio.volume = this.naturalSettings.volume;
             audio.preservesPitch = this.naturalSettings.preservesPitch;
@@ -117,7 +117,7 @@ class NaturalAudioPlayer {
             
             console.log('🔊 Audio chunk converted:', bytes.length, 'bytes');
             
-            // Play with natural settings
+            // Play with natural settings to prevent robotic sound
             const success = await this.playNaturalAudio(bytes, metadata);
             
             if (success) {
@@ -194,7 +194,7 @@ class CallHandler {
         this.isRecording = false;
         this.debugMode = false;
         
-        // FIXED: Natural audio player
+        // FIXED: Natural audio player to prevent robotic voice
         this.naturalAudioPlayer = new NaturalAudioPlayer();
         this.audioSequenceActive = false;
     }
@@ -616,14 +616,14 @@ class CallHandler {
         console.log('🎬 Audio sequence starting:', data.text);
         this.audioSequenceActive = true;
         
-        // Stop any currently playing audio
+        // Stop any currently playing audio to prevent overlap
         this.naturalAudioPlayer.stopCurrentAudio();
         
         this.updateStatus('Agent speaking...');
     }
     
     /**
-     * FIXED: Handle natural audio chunks
+     * FIXED: Handle natural audio chunks to prevent robotic voice
      */
     async handleNaturalAudioChunk(data) {
         try {
@@ -634,7 +634,7 @@ class CallHandler {
             
             console.log('🔊 Processing natural audio chunk:', data.chunk_number);
             
-            // CRITICAL: Use natural audio player
+            // CRITICAL: Use natural audio player to prevent robotic voice
             const success = await this.naturalAudioPlayer.handleAudioChunk(
                 data.data, 
                 {
@@ -698,7 +698,7 @@ class CallHandler {
             transcriptDiv.appendChild(entry);
             transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
             
-            // Limit transcript entries
+            // Limit transcript entries to prevent memory issues
             const entries = transcriptDiv.querySelectorAll('.transcript-entry');
             if (entries.length > 50) {
                 entries[0].remove();
@@ -788,6 +788,7 @@ class CallHandler {
         
         this.isRecording = false;
         
+        // Stop MediaRecorder
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             try {
                 this.mediaRecorder.stop();
@@ -796,6 +797,7 @@ class CallHandler {
             }
         }
         
+        // Disconnect audio processing nodes
         if (this.audioProcessor) {
             try {
                 this.audioProcessor.disconnect();
@@ -812,6 +814,7 @@ class CallHandler {
             }
         }
         
+        // Stop media stream tracks
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => {
                 try {
@@ -825,10 +828,12 @@ class CallHandler {
         // Stop any playing audio
         this.naturalAudioPlayer.stopCurrentAudio();
         
+        // Send end call message
         this.sendMessage({
             type: 'end_call'
         });
         
+        // Close WebSocket
         if (this.ws) {
             try {
                 this.ws.close();
@@ -839,6 +844,7 @@ class CallHandler {
         
         this.updateStatus('Call ended');
         
+        // Redirect to home page after brief delay
         setTimeout(() => {
             window.location.href = '/';
         }, 2000);
@@ -900,7 +906,7 @@ class CallHandler {
     }
 }
 
-// Global variable - FIXED declaration
+// Global variable for call handler instance
 let callHandler = null;
 
 // Global functions for call interface
@@ -911,7 +917,7 @@ async function startCall() {
         callHandler = new CallHandler();
     }
     
-    // Update UI
+    // Update UI to show call is starting
     document.getElementById('start-call-btn').style.display = 'none';
     document.getElementById('mute-btn').style.display = 'inline-block';
     document.getElementById('pause-btn').style.display = 'inline-block';
@@ -924,13 +930,13 @@ async function startCall() {
         await callHandler.initialize();
         console.log('✅ Call handler with natural audio initialized');
         
-        // Set optimal audio volume
+        // Set optimal audio volume for natural playback
         callHandler.setAudioVolume(0.8);
         
     } catch (error) {
         console.error('❌ Failed to start call:', error);
         
-        // Error handling
+        // Error handling with specific messages
         let errorMessage = 'Failed to start call';
         if (error.message.includes('Permission denied')) {
             errorMessage = 'Microphone access denied. Please allow microphone access.';
@@ -943,7 +949,7 @@ async function startCall() {
         
         document.getElementById('call-status').textContent = errorMessage;
         
-        // Reset UI
+        // Reset UI on error
         document.getElementById('start-call-btn').style.display = 'inline-block';
         document.getElementById('mute-btn').style.display = 'none';
         document.getElementById('pause-btn').style.display = 'none';
@@ -1018,6 +1024,7 @@ function showMicrophoneInstructions() {
     `;
     document.body.appendChild(instructions);
     
+    // Auto-remove after 20 seconds
     setTimeout(() => {
         if (instructions.parentElement) {
             instructions.remove();
@@ -1025,7 +1032,7 @@ function showMicrophoneInstructions() {
     }, 20000);
 }
 
-// Test functions for natural audio
+// Test functions for natural audio debugging
 function testNaturalAudio() {
     if (callHandler) {
         callHandler.testNaturalVoice();
@@ -1061,7 +1068,7 @@ function checkCallHandler() {
     }
 }
 
-// Test message functions
+// Test message functions for debugging
 function sendTestMessage(message) {
     if (callHandler && callHandler.isConnected) {
         console.log('📤 Sending test message:', message);
@@ -1106,12 +1113,14 @@ function testConversation() {
             sendTestMessage(message);
             messageIndex++;
             
+            // Wait 5 seconds before next message
             setTimeout(sendNextMessage, 5000);
         } else {
             console.log('✅ Test conversation completed');
         }
     }
     
+    // Start after 2 seconds
     setTimeout(sendNextMessage, 2000);
 }
 
@@ -1157,7 +1166,7 @@ function debugAudioPlayback() {
     }
 }
 
-// Add functions to global scope
+// Add functions to global scope for debugging
 window.sendTestMessage = sendTestMessage;
 window.testConversation = testConversation;
 window.checkWebSocketStatus = checkWebSocketStatus;
@@ -1179,7 +1188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 1000);
 });
 
-// Add keyboard shortcuts
+// Add keyboard shortcuts for accessibility
 document.addEventListener('keydown', (event) => {
     if (event.altKey) {
         switch(event.code) {
@@ -1199,7 +1208,7 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
-// Handle page unload
+// Handle page unload to cleanup resources
 window.addEventListener('beforeunload', (event) => {
     if (callHandler && callHandler.isConnected) {
         callHandler.endCall();
@@ -1216,3 +1225,4 @@ console.log('- debugAudioPlayback() - Debug audio support');
 console.log('- checkCallHandler() - Check handler status');
 console.log('- setAudioVolume(0.8) - Set audio volume');
 console.log('- checkAudioStatus() - Check audio player status');
+console.log('🎯 Ready for natural audio calls!');

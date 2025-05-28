@@ -2,9 +2,6 @@
  * Fixed Call Handler - Complete Version with Audio Overlap Fix
  */
 
-// Global call handler instance
-let callHandler = null;
-
 class CallHandler {
     constructor() {
         this.ws = null;
@@ -19,6 +16,7 @@ class CallHandler {
         this.startTime = null;
         this.durationInterval = null;
         this.connectionReady = false;
+        this.shouldStopCurrentAudio = false;
         
         // Audio processing parameters
         this.targetSampleRate = 16000;
@@ -410,43 +408,7 @@ class CallHandler {
         }
     }
 
-    handleWebSocketMessage(data) {
-        try {
-            console.log('📨 Received WebSocket message:', data.type, data);
-            
-            switch (data.type) {
-                case 'transcript':
-                    this.addTranscript(data.speaker, data.text);
-                    break;
-                    
-                case 'audio':
-                    this.playAudio(data.data);
-                    break;
-                    
-                case 'status':
-                    this.updateStatus(data.message);
-                    break;
-                    
-                case 'error':
-                    console.error('❌ Server error:', data.message);
-                    this.updateStatus('Error: ' + data.message);
-                    break;
-                    
-                case 'connected':
-                    this.updateStatus('Connected to server');
-                    break;
-                    
-                case 'test_response':
-                    console.log('🧪 Test response received:', data);
-                    break;
-                    
-                default:
-                    console.log('❓ Unknown message type:', data.type, data);
-            }
-        } catch (error) {
-            console.error('❌ Error handling WebSocket message:', error);
-        }
-    }
+
 
     addTranscript(speaker, text) {
         try {
@@ -489,39 +451,141 @@ class CallHandler {
         }
     }
 
-    // FIXED: Complete audio playback method to prevent overlap
     async playAudio(hexData) {
         try {
             if (!hexData || typeof hexData !== 'string') {
                 console.warn('⚠️ Invalid audio data received');
                 return;
             }
-            
+
             console.log('🔊 Processing TTS audio data:', hexData.length + ' chars');
-            
+
             // Convert hex string back to array buffer
             const bytes = new Uint8Array(
                 hexData.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
             );
-            
+
             console.log('🔊 Audio bytes converted:', bytes.length);
-            
-            // CRITICAL FIX: Stop any currently playing audio first
-            await this.stopCurrentAudio();
-            
-            // FIXED: Use ONLY one playback method to prevent overlap
-            const success = await this.playAudioSingle(bytes);
-            
-            if (!success) {
-                console.warn('⚠️ Primary audio playback failed, trying fallback');
-                await this.playAudioFallback(bytes);
+
+            // FIXED: Only stop if we're starting a new sentence/response
+            // Don't stop for every chunk of the same response
+            if (this.shouldStopCurrentAudio) {
+                await this.stopCurrentAudio();
+                this.shouldStopCurrentAudio = false;
             }
-            
+
+            // Play audio chunk
+            const success = await this.playAudioChunk(bytes);
+
+            if (!success) {
+                console.warn('⚠️ Audio chunk playback failed');
+            }
+
         } catch (error) {
             console.error('❌ Audio playback error:', error);
-            this.updateStatus('Audio playback failed');
         }
     }
+
+    // NEW: Play individual audio chunks without stopping previous ones
+    async playAudioChunk(bytes) {
+        try {
+            // Create blob with proper MIME type
+            const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+            const audioUrl = URL.createObjectURL(audioBlob);
+
+            console.log('🔊 Created audio chunk URL:', audioUrl);
+
+            // Create audio element
+            const audio = new Audio(audioUrl);
+            audio.volume = this.audioSettings.volume;
+            audio.playbackRate = this.audioSettings.playbackRate;
+            audio.preservesPitch = true;
+
+            // Play immediately without waiting for canplaythrough
+            return new Promise((resolve) => {
+                audio.addEventListener('loadeddata', async () => {
+                    try {
+                        await audio.play();
+                        console.log('✅ Audio chunk started playing');
+                        resolve(true);
+                    } catch (playError) {
+                        console.error('❌ Play failed:', playError);
+                        resolve(false);
+                    }
+                }, { once: true });
+
+                audio.addEventListener('ended', () => {
+                    URL.revokeObjectURL(audioUrl);
+                    console.log('🔊 Audio chunk finished');
+                }, { once: true });
+
+                audio.addEventListener('error', (e) => {
+                    console.error('🔊 Audio chunk error:', e);
+                    URL.revokeObjectURL(audioUrl);
+                    resolve(false);
+                }, { once: true });
+
+                // Start loading
+                audio.load();
+
+                // Timeout
+                setTimeout(() => {
+                    if (audio.readyState < 2) {
+                        console.warn('Audio chunk load timeout');
+                        resolve(false);
+                    }
+                }, 5000);
+            });
+
+        } catch (error) {
+            console.error('❌ Audio chunk creation failed:', error);
+            return false;
+        }
+    }
+
+    // Updated handleWebSocketMessage to handle audio_complete
+    handleWebSocketMessage(data) {
+        try {
+            console.log('📨 Received WebSocket message:', data.type, data);
+            
+            switch (data.type) {
+                case 'transcript':
+                    this.addTranscript(data.speaker, data.text);
+                    break;
+                    
+                case 'audio':
+                    this.playAudio(data.data);
+                    break;
+                    
+                case 'audio_complete':
+                    console.log('🔊 Audio sequence complete:', data);
+                    this.shouldStopCurrentAudio = true; // Prepare for next response
+                    break;
+                    
+                case 'status':
+                    this.updateStatus(data.message);
+                    break;
+                    
+                case 'error':
+                    console.error('❌ Server error:', data.message);
+                    this.updateStatus('Error: ' + data.message);
+                    break;
+                    
+                case 'connected':
+                    this.updateStatus('Connected to server');
+                    break;
+                    
+                case 'test_response':
+                    console.log('🧪 Test response received:', data);
+                    break;
+                    
+                default:
+                    console.log('❓ Unknown message type:', data.type, data);
+            }
+        } catch (error) {
+            console.error('❌ Error handling WebSocket message:', error);
+        }
+    } 
 
     // NEW: Stop any currently playing audio
     async stopCurrentAudio() {

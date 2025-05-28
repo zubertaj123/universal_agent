@@ -3,7 +3,7 @@ Audio processing utilities - Enhanced version with improved audio handling
 """
 import numpy as np
 from scipy import signal
-from typing import List, Dict, Any, Optional, Union, Tuple
+from typing import List, Dict, Any, Optional, Union, Tuple, Callable
 import subprocess
 import struct
 import wave

@@ -7,11 +7,12 @@ from faster_whisper import WhisperModel
 import numpy as np
 from pathlib import Path
 import hashlib
-from typing import Optional, AsyncGenerator, Dict, List
+from typing import Optional, AsyncGenerator, Dict, List, Any
 import torch
 import aiofiles
 from app.core.config import settings
 from app.utils.logger import setup_logger
+
 
 logger = setup_logger(__name__)
 

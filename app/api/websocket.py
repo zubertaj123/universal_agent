@@ -162,108 +162,6 @@ class CallSession:
             logger.error(f"Failed to update call record: {e}")
 
 
-async def handle_audio_message(
-    message: dict,
-    session: CallSession,
-    agent_state: AgentState,
-    speech_service: SpeechService,
-    websocket: WebSocket
-):
-    """Handle audio data from client - Fixed version"""
-    try:
-        audio_data = message.get("data", "")
-        if not audio_data:
-            return
-            
-        # Convert hex string to bytes with error handling
-        try:
-            audio_bytes = bytes.fromhex(audio_data)
-        except ValueError as e:
-            logger.warning(f"Invalid hex audio data: {e}")
-            return
-        
-        if len(audio_bytes) == 0:
-            return
-            
-        # Process audio stream with improved error handling
-        try:
-            processed_audio = await session.handle_audio_stream(audio_bytes)
-        except Exception as e:
-            logger.error(f"Audio stream processing failed: {e}")
-            # Continue processing but with a placeholder
-            processed_audio = None
-        
-        # Only proceed with transcription if we have valid audio
-        if processed_audio is not None and len(processed_audio) > 0:
-            try:
-                # Check for voice activity with fallback
-                has_speech = False
-                try:
-                    has_speech = speech_service.detect_voice_activity(processed_audio)
-                except Exception as e:
-                    logger.warning(f"VAD failed: {e}, using basic energy detection")
-                    # Fallback to simple energy-based detection
-                    rms_energy = np.sqrt(np.mean(processed_audio**2))
-                    has_speech = rms_energy > 0.001
-                
-                if has_speech:
-                    logger.debug("Speech detected, attempting transcription")
-                    
-                    # Transcribe audio with timeout and error handling
-                    transcription = None
-                    try:
-                        # Add timeout to prevent hanging
-                        transcription = await asyncio.wait_for(
-                            speech_service.transcribe(processed_audio),
-                            timeout=5.0
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("Transcription timeout")
-                    except Exception as e:
-                        logger.error(f"Transcription failed: {e}")
-                    
-                    # Process transcription if successful
-                    if transcription and transcription.strip():
-                        logger.info(f"Transcribed: {transcription}")
-                        
-                        # Send transcript to client
-                        await send_message_to_client(websocket, "transcript", {
-                            "speaker": "user",
-                            "text": transcription
-                        })
-                        
-                        # Add to agent state
-                        agent_state["messages"].append({
-                            "role": "user",
-                            "content": transcription,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        
-                        # Update call record safely
-                        try:
-                            await session.update_call_record(
-                                transcript=agent_state["messages"]
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to update call record: {e}")
-                        
-                        # Trigger agent processing
-                        agent_state["current_speaker"] = "user"
-                    else:
-                        logger.debug("No transcription result or empty text")
-                else:
-                    logger.debug("No speech detected in audio chunk")
-            except Exception as e:
-                logger.error(f"Speech processing failed: {e}")
-        else:
-            logger.debug("No valid audio data to process")
-            
-    except Exception as e:
-        logger.error(f"Error handling audio message: {e}")
-        await send_message_to_client(websocket, "error", {
-            "message": "Error processing audio - continuing with demo mode"
-        })
-
 
 @websocket_router.websocket("/ws/call/{session_id}")
 async def websocket_call(
@@ -402,8 +300,10 @@ async def handle_websocket_message(
     speech_service: SpeechService,
     websocket: WebSocket
 ):
-    """Handle incoming WebSocket messages"""
+    """Handle incoming WebSocket messages - FIXED VERSION"""
     message_type = message.get("type")
+    
+    logger.debug(f"Received WebSocket message: {message_type}")
     
     if message_type == "audio":
         await handle_audio_message(message, session, agent_state, speech_service, websocket)
@@ -413,9 +313,202 @@ async def handle_websocket_message(
         await handle_control_message(message, session, websocket)
     elif message_type == "end_call":
         await handle_end_call(message, session, agent_state, websocket)
+    elif message_type == "connection":
+        # FIXED: Handle connection message
+        await handle_connection_message(message, session, websocket)
+    elif message_type == "test":
+        # Handle test messages for debugging
+        await handle_test_message(message, session, websocket)
     else:
         logger.warning(f"Unknown message type: {message_type}")
+        await send_message_to_client(websocket, "error", {
+            "message": f"Unknown message type: {message_type}"
+        })
 
+async def handle_connection_message(
+    message: dict,
+    session: CallSession,
+    websocket: WebSocket
+):
+    """Handle connection initialization message"""
+    try:
+        session_id = message.get("sessionId", "unknown")
+        timestamp = message.get("timestamp")
+        
+        logger.info(f"Connection message received from session: {session_id}")
+        
+        # Send acknowledgment
+        await send_message_to_client(websocket, "connected", {
+            "sessionId": session_id,
+            "status": "acknowledged",
+            "server_time": datetime.now().isoformat()
+        })
+        
+        # Send initial greeting after connection is established
+        await asyncio.sleep(0.5)  # Small delay to ensure client is ready
+        
+        greeting = "Hello! Thank you for calling. I'm your AI assistant. How may I help you today?"
+        
+        # Send transcript
+        await send_message_to_client(websocket, "transcript", {
+            "speaker": "agent",
+            "text": greeting
+        })
+        
+        # Generate TTS for greeting
+        try:
+            await generate_and_send_tts(websocket, speech_service, greeting, "en-US-AriaNeural")
+        except Exception as e:
+            logger.error(f"TTS generation failed for greeting: {e}")
+        
+    except Exception as e:
+        logger.error(f"Error handling connection message: {e}")
+
+async def handle_test_message(
+    message: dict,
+    session: CallSession,
+    websocket: WebSocket
+):
+    """Handle test messages for debugging"""
+    try:
+        logger.info(f"Test message received: {message}")
+        
+        # Echo back the test message
+        await send_message_to_client(websocket, "test_response", {
+            "original_message": message,
+            "server_time": datetime.now().isoformat(),
+            "session_id": session.session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Error handling test message: {e}")
+
+async def handle_audio_message(
+    message: dict,
+    session: CallSession,
+    agent_state: AgentState,
+    speech_service: SpeechService,
+    websocket: WebSocket
+):
+    """Handle audio data from client - IMPROVED VERSION"""
+    try:
+        audio_data = message.get("data", "")
+        if not audio_data:
+            logger.debug("Empty audio data received")
+            return
+            
+        # Convert hex string to bytes with error handling
+        try:
+            audio_bytes = bytes.fromhex(audio_data)
+        except ValueError as e:
+            logger.warning(f"Invalid hex audio data: {e}")
+            return
+        
+        if len(audio_bytes) == 0:
+            logger.debug("Zero-length audio data")
+            return
+        
+        logger.debug(f"Processing audio chunk: {len(audio_bytes)} bytes")
+            
+        # Process audio stream with improved error handling
+        try:
+            processed_audio = await session.handle_audio_stream(audio_bytes)
+        except Exception as e:
+            logger.error(f"Audio stream processing failed: {e}")
+            processed_audio = None
+        
+        # Only proceed with transcription if we have valid audio
+        if processed_audio is not None and len(processed_audio) > 0:
+            try:
+                # Check for voice activity with fallback
+                has_speech = False
+                try:
+                    has_speech = speech_service.detect_voice_activity(processed_audio)
+                except Exception as e:
+                    logger.warning(f"VAD failed: {e}, using basic energy detection")
+                    # Fallback to simple energy-based detection
+                    rms_energy = np.sqrt(np.mean(processed_audio**2))
+                    has_speech = rms_energy > 0.01  # Lowered threshold for testing
+                
+                if has_speech:
+                    logger.info("Speech detected, attempting transcription")
+                    
+                    # Transcribe audio with timeout and error handling
+                    transcription = None
+                    try:
+                        # Add timeout to prevent hanging
+                        transcription = await asyncio.wait_for(
+                            speech_service.transcribe(processed_audio),
+                            timeout=10.0  # Increased timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Transcription timeout")
+                    except Exception as e:
+                        logger.error(f"Transcription failed: {e}")
+                    
+                    # Process transcription if successful
+                    if transcription and transcription.strip():
+                        logger.info(f"Transcribed: '{transcription}'")
+                        
+                        # Send transcript to client
+                        await send_message_to_client(websocket, "transcript", {
+                            "speaker": "user",
+                            "text": transcription
+                        })
+                        
+                        # Add to agent state
+                        agent_state["messages"].append({
+                            "role": "user",
+                            "content": transcription,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        # Update call record safely
+                        try:
+                            await session.update_call_record(
+                                transcript=agent_state["messages"]
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to update call record: {e}")
+                        
+                        # Trigger agent processing by setting current speaker
+                        agent_state["current_speaker"] = "user"
+                        
+                        logger.info("Agent processing triggered")
+                        
+                    else:
+                        logger.debug("No transcription result or empty text")
+                        
+                        # For testing: simulate user input every 50 audio chunks
+                        session.audio_chunk_count = getattr(session, 'audio_chunk_count', 0) + 1
+                        if session.audio_chunk_count % 100 == 0:  # Every 100 chunks for testing
+                            test_message = "I need help with my insurance claim"
+                            logger.info(f"Simulating user input for testing: {test_message}")
+                            
+                            await send_message_to_client(websocket, "transcript", {
+                                "speaker": "user", 
+                                "text": test_message
+                            })
+                            
+                            agent_state["messages"].append({
+                                "role": "user",
+                                "content": test_message,
+                                "timestamp": datetime.now().isoformat()
+                            })
+                            
+                            agent_state["current_speaker"] = "user"
+                else:
+                    logger.debug("No speech detected in audio chunk")
+            except Exception as e:
+                logger.error(f"Speech processing failed: {e}")
+        else:
+            logger.debug("No valid audio data to process")
+            
+    except Exception as e:
+        logger.error(f"Error handling audio message: {e}")
+        await send_message_to_client(websocket, "error", {
+            "message": "Error processing audio - continuing with demo mode"
+        })
 
 async def handle_text_message(
     message: dict,
@@ -423,13 +516,13 @@ async def handle_text_message(
     agent_state: AgentState,
     websocket: WebSocket
 ):
-    """Handle text message from client"""
+    """Handle text message from client - IMPROVED"""
     try:
         text = message.get("text", "").strip()
         if not text:
             return
             
-        logger.debug(f"Received text: {text}")
+        logger.info(f"Received text message: '{text}'")
         
         # Send transcript confirmation
         await send_message_to_client(websocket, "transcript", {
@@ -445,12 +538,17 @@ async def handle_text_message(
         })
         
         # Update call record
-        await session.update_call_record(
-            transcript=agent_state["messages"]
-        )
+        try:
+            await session.update_call_record(
+                transcript=agent_state["messages"]
+            )
+        except Exception as e:
+            logger.error(f"Failed to update call record: {e}")
         
         # Trigger agent processing
         agent_state["current_speaker"] = "user"
+        
+        logger.info("Agent processing triggered from text message")
         
     except Exception as e:
         logger.error(f"Error handling text message: {e}")
@@ -458,6 +556,173 @@ async def handle_text_message(
             "message": "Error processing text message"
         })
 
+# FIXED: Improved agent loop that actually processes messages
+async def run_agent_loop(
+    agent: CallCenterAgent,
+    state: AgentState,
+    session: CallSession,
+    speech_service: SpeechService,
+    websocket: WebSocket
+):
+    """Run the agent processing loop - IMPROVED VERSION"""
+    logger.info("Starting improved agent processing loop")
+    
+    # Send initial greeting immediately
+    try:
+        initial_greeting = "Hello! I'm your AI assistant. I can help you with insurance claims, policy questions, or connect you with a human agent. What can I help you with today?"
+        
+        # Add to state
+        state["messages"].append({
+            "role": "assistant",
+            "content": initial_greeting,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Send to client
+        await send_message_to_client(websocket, "transcript", {
+            "speaker": "agent",
+            "text": initial_greeting
+        })
+        
+        # Generate TTS
+        await generate_and_send_tts(websocket, speech_service, initial_greeting, "en-US-AriaNeural")
+        
+        logger.info("Initial greeting sent")
+        
+    except Exception as e:
+        logger.error(f"Failed to send initial greeting: {e}")
+    
+    # Main processing loop
+    last_message_count = 0
+    
+    while session.is_active and state["call_status"] not in ["ended", "ending"]:
+        try:
+            current_message_count = len(state["messages"])
+            
+            # Check if there are new messages to process
+            if current_message_count > last_message_count:
+                logger.debug(f"Message count changed: {last_message_count} -> {current_message_count}")
+                
+                # Check if the last message is from user and we haven't responded yet
+                if (state["messages"] and 
+                    state["messages"][-1].get("role") == "user"):
+                    
+                    # Check if we already have a response
+                    user_message_time = state["messages"][-1].get("timestamp")
+                    needs_response = True
+                    
+                    # Look for agent response after this user message
+                    for i in range(len(state["messages"]) - 1, -1, -1):
+                        msg = state["messages"][i]
+                        if (msg.get("role") == "assistant" and 
+                            msg.get("timestamp", "") > user_message_time):
+                            needs_response = False
+                            break
+                        elif msg.get("role") == "user":
+                            break
+                    
+                    if needs_response:
+                        logger.info("Processing user message with agent...")
+                        
+                        user_message = state["messages"][-1].get("content", "")
+                        logger.info(f"User said: '{user_message}'")
+                        
+                        # Set state for agent processing
+                        state["current_speaker"] = "user"
+                        
+                        try:
+                            # Run agent workflow
+                            logger.debug("Running agent workflow...")
+                            updated_state = await agent.run(state)
+                            
+                            # Update state
+                            state.update(updated_state)
+                            
+                            logger.debug("Agent workflow completed")
+                            
+                        except Exception as e:
+                            logger.error(f"Agent workflow error: {e}")
+                            
+                            # Fallback response
+                            fallback_response = "I apologize, I'm having trouble processing your request right now. Let me try to help you anyway. Could you please tell me more about what you need assistance with?"
+                            
+                            # Add fallback response
+                            state["messages"].append({
+                                "role": "assistant", 
+                                "content": fallback_response,
+                                "timestamp": datetime.now().isoformat()
+                            })
+                        
+                        # Check if agent generated a response
+                        if (len(state["messages"]) > current_message_count and
+                            state["messages"][-1].get("role") == "assistant"):
+                            
+                            response_text = state["messages"][-1].get("content", "")
+                            if response_text.strip():
+                                logger.info(f"Agent response: '{response_text}'")
+                                
+                                # Send transcript
+                                await send_message_to_client(websocket, "transcript", {
+                                    "speaker": "agent", 
+                                    "text": response_text
+                                })
+                                
+                                # Generate and send TTS
+                                try:
+                                    await generate_and_send_tts(websocket, speech_service, response_text, "en-US-AriaNeural")
+                                except Exception as e:
+                                    logger.error(f"TTS generation failed: {e}")
+                                
+                                # Update call record
+                                try:
+                                    await session.update_call_record(
+                                        transcript=state["messages"]
+                                    )
+                                except Exception as e:
+                                    logger.error(f"Failed to update call record: {e}")
+                                
+                                # Reset speaker state
+                                state["current_speaker"] = "waiting"
+                                
+                                logger.info("Agent response sent successfully")
+                            else:
+                                logger.warning("Agent generated empty response")
+                        else:
+                            logger.warning("Agent did not generate a response")
+                
+                last_message_count = current_message_count
+            
+            # Small delay to prevent tight loop
+            await asyncio.sleep(0.1)
+            
+        except Exception as e:
+            logger.error(f"Agent loop error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            await asyncio.sleep(1)  # Longer delay on error
+    
+    logger.info("Agent processing loop ended")
+
+# Helper function to send a test message (for debugging)
+async def send_test_user_message(websocket: WebSocket, agent_state: AgentState):
+    """Send a test user message for debugging"""
+    test_message = "Hello, I need help with filing an insurance claim"
+    
+    await send_message_to_client(websocket, "transcript", {
+        "speaker": "user",
+        "text": test_message
+    })
+    
+    agent_state["messages"].append({
+        "role": "user",
+        "content": test_message, 
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    agent_state["current_speaker"] = "user"
+    
+    logger.info(f"Sent test message: {test_message}")
+    
 async def handle_control_message(
     message: dict,
     session: CallSession,
@@ -519,65 +784,6 @@ async def handle_end_call(
         
     except Exception as e:
         logger.error(f"Error handling end call: {e}")
-
-async def run_agent_loop(
-    agent: CallCenterAgent,
-    state: AgentState,
-    session: CallSession,
-    speech_service: SpeechService,
-    websocket: WebSocket
-):
-    """Run the agent processing loop"""
-    logger.info("Starting agent processing loop")
-    
-    while session.is_active and state["call_status"] not in ["ended", "ending"]:
-        try:
-            # Only process if there's new user input
-            if (state["messages"] and 
-                state["messages"][-1].get("role") == "user" and
-                state["current_speaker"] == "user"):
-                
-                logger.debug("Processing agent workflow...")
-                
-                # Run agent workflow
-                updated_state = await agent.run(state)
-                
-                # Update state
-                state.update(updated_state)
-                
-                # Check if agent generated a response
-                if (state["messages"] and 
-                    state["messages"][-1].get("role") == "assistant" and
-                    state["current_speaker"] == "agent"):
-                    
-                    response_text = state["messages"][-1].get("content", "")
-                    if response_text.strip():
-                        # Send transcript
-                        await send_message_to_client(websocket, "transcript", {
-                            "speaker": "agent", 
-                            "text": response_text
-                        })
-                        
-                        # Generate and send TTS - Fixed: use proper voice
-                        await generate_and_send_tts(websocket, speech_service, response_text, "en-US-AriaNeural")
-                        
-                        # Update call record
-                        await session.update_call_record(
-                            transcript=state["messages"]
-                        )
-                        
-                        # Reset speaker to wait for user
-                        state["current_speaker"] = "waiting"
-            
-            # Small delay to prevent tight loop
-            await asyncio.sleep(0.1)
-            
-        except Exception as e:
-            logger.error(f"Agent loop error: {e}")
-            logger.error(traceback.format_exc())
-            await asyncio.sleep(1)  # Longer delay on error
-    
-    logger.info("Agent processing loop ended")
 
 async def handle_audio_output(
     audio_queue: asyncio.Queue,

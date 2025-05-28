@@ -132,7 +132,8 @@ class SpeechService:
         pitch: str = "+0Hz",
         stream: bool = True
     ) -> AsyncGenerator[bytes, None]:
-        """Convert text to speech"""
+        """Convert text to speech with improved audio quality"""
+        
         # Fix voice style mapping
         voice_style = voice or self.current_voice
         
@@ -148,35 +149,149 @@ class SpeechService:
         # Use mapping if it's a style name, otherwise use as-is
         actual_voice = voice_mapping.get(voice_style.lower(), voice_style)
         
+        # FIXED: Adjust rate and pitch for more natural speech
+        if rate == "+0%":
+            rate = "-10%"  # Slightly slower for better comprehension
+        if pitch == "+0Hz":
+            pitch = "-2Hz"  # Slightly lower pitch for more natural sound
+        
+        logger.info(f"Generating TTS: voice={actual_voice}, rate={rate}, pitch={pitch}")
+        
         # Check cache
         if settings.TTS_CACHE_ENABLED and not stream:
             cache_key = self._get_cache_key(text, actual_voice, rate, pitch)
             cached_file = self.tts_cache_dir / f"{cache_key}.mp3"
             
             if cached_file.exists():
+                logger.debug(f"Using cached TTS: {cache_key}")
                 async with aiofiles.open(cached_file, 'rb') as f:
                     data = await f.read()
                     yield data
                 return
                 
-        # Generate speech
-        communicate = edge_tts.Communicate(text, actual_voice, rate=rate, pitch=pitch)
-        
-        if stream:
-            # Stream audio chunks
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    yield chunk["data"]
-        else:
-            # Save to cache
-            cache_key = self._get_cache_key(text, actual_voice, rate, pitch)
-            cached_file = self.tts_cache_dir / f"{cache_key}.mp3"
+        # Generate speech with improved settings
+        try:
+            communicate = edge_tts.Communicate(
+                text=text, 
+                voice=actual_voice, 
+                rate=rate, 
+                pitch=pitch
+            )
             
-            await communicate.save(str(cached_file))
-            async with aiofiles.open(cached_file, 'rb') as f:
-                data = await f.read()
-                yield data
+            logger.debug(f"Starting TTS generation for: '{text[:50]}...'")
+            
+            if stream:
+                # Stream audio chunks
+                chunk_count = 0
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        chunk_count += 1
+                        yield chunk["data"]
+                        
+                logger.debug(f"TTS streaming completed: {chunk_count} chunks")
                 
+            else:
+                # Save to cache and return
+                cache_key = self._get_cache_key(text, actual_voice, rate, pitch)
+                cached_file = self.tts_cache_dir / f"{cache_key}.mp3"
+                
+                # Generate to temp file first
+                temp_file = cached_file.with_suffix('.tmp')
+                await communicate.save(str(temp_file))
+                
+                # Move to final location
+                temp_file.rename(cached_file)
+                
+                # Read and yield the generated audio
+                async with aiofiles.open(cached_file, 'rb') as f:
+                    data = await f.read()
+                    yield data
+                    
+                logger.debug(f"TTS cached: {cache_key}")
+                
+        except Exception as e:
+            logger.error(f"TTS generation failed: {e}")
+            # Generate a simple error tone instead of failing
+            yield await self._generate_error_tone()
+    
+    async def _generate_error_tone(self) -> bytes:
+        """Generate a simple error tone when TTS fails"""
+        try:
+            # Create a simple beep using Edge TTS
+            error_communicate = edge_tts.Communicate(
+                "Audio generation error", 
+                "en-US-AriaNeural",
+                rate="-20%",
+                pitch="-5Hz"
+            )
+            
+            temp_file = self.tts_cache_dir / "error_tone.mp3"
+            await error_communicate.save(str(temp_file))
+            
+            async with aiofiles.open(temp_file, 'rb') as f:
+                return await f.read()
+        except:
+            # Return empty bytes if even error tone fails
+            return b""
+
+    async def generate_and_send_tts(
+        websocket: WebSocket,
+        speech_service: SpeechService,
+        text: str,
+        voice_style: str = "en-US-AriaNeural"
+    ):
+        """Generate TTS and send audio to client - FIXED VERSION"""
+        try:
+            if not text.strip():
+                return
+                
+            logger.info(f"Generating TTS for: '{text[:50]}...'")
+            
+            # Set voice style
+            speech_service.set_voice(voice_style)
+            
+            # Generate audio in chunks for streaming
+            chunk_count = 0
+            total_bytes = 0
+            
+            async for audio_chunk in speech_service.synthesize(text, stream=True):
+                if audio_chunk and len(audio_chunk) > 0:
+                    chunk_count += 1
+                    total_bytes += len(audio_chunk)
+                    
+                    # Convert to hex for transmission
+                    hex_data = audio_chunk.hex()
+                    
+                    # Send audio chunk to client
+                    await websocket.send_json({
+                        "type": "audio",
+                        "data": hex_data,
+                        "chunk": chunk_count,
+                        "format": "mp3",
+                        "voice": voice_style
+                    })
+                    
+                    # Small delay between chunks for smoother playback
+                    await asyncio.sleep(0.01)
+            
+            logger.info(f"TTS sent: {chunk_count} chunks, {total_bytes} bytes total")
+            
+            # Send end marker
+            await websocket.send_json({
+                "type": "audio_complete",
+                "chunks_sent": chunk_count,
+                "total_bytes": total_bytes
+            })
+                
+        except Exception as e:
+            logger.error(f"TTS generation error: {e}")
+            
+            # Send error notification to client
+            await websocket.send_json({
+                "type": "audio_error",
+                "message": "TTS generation failed"
+            })
+
     def _get_cache_key(self, text: str, voice: str, rate: str, pitch: str) -> str:
         """Generate cache key for TTS"""
         key_string = f"{text}_{voice}_{rate}_{pitch}"

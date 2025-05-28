@@ -1,5 +1,5 @@
 /**
- * Fixed Call Handler - WebSocket Connection Issues Resolved
+ * Fixed Call Handler - Complete Version with Audio Overlap Fix
  */
 
 // Global call handler instance
@@ -26,6 +26,16 @@ class CallHandler {
         this.audioWorkletNode = null;
         this.isRecording = false;
         this.debugMode = false;
+        
+        // FIXED: Audio playback tracking to prevent overlap
+        this.currentAudioElement = null;
+        this.currentAudioUrl = null;
+        this.currentAudioSource = null;
+        this.audioSettings = {
+            volume: 0.9,
+            playbackRate: 1.0,
+            useCompressor: true
+        };
     }
 
     async initialize() {
@@ -44,7 +54,7 @@ class CallHandler {
             console.log('🎤 Requesting microphone access...');
             await this.requestMicrophoneAccess();
             
-            // Step 3: Setup WebSocket connection (FIXED)
+            // Step 3: Setup WebSocket connection
             console.log('🔌 Setting up WebSocket connection...');
             await this.connectWebSocket();
             
@@ -116,20 +126,11 @@ class CallHandler {
 
     async connectWebSocket() {
         return new Promise((resolve, reject) => {
-            // FIXED: Simplified and more reliable WebSocket URL construction
             const wsUrl = this.buildWebSocketUrl();
             
             console.log('Connecting to WebSocket:', wsUrl);
-            console.log('Location details:', {
-                protocol: window.location.protocol,
-                hostname: window.location.hostname, 
-                host: window.location.host,
-                port: window.location.port
-            });
             
             this.ws = new WebSocket(wsUrl);
-            
-            // Set binary type for audio data
             this.ws.binaryType = 'arraybuffer';
             
             this.ws.onopen = () => {
@@ -154,13 +155,11 @@ class CallHandler {
                     this.handleWebSocketMessage(data);
                 } catch (error) {
                     console.error('Error parsing WebSocket message:', error);
-                    console.log('Raw message:', event.data);
                 }
             };
             
             this.ws.onerror = (error) => {
                 console.error('❌ WebSocket error:', error);
-                console.log('WebSocket state:', this.ws?.readyState);
                 this.updateStatus('Connection error');
                 reject(new Error(`WebSocket connection failed: ${error.message || 'Unknown error'}`));
             };
@@ -174,18 +173,10 @@ class CallHandler {
                     wasClean: event.wasClean
                 });
                 
-                // Handle different close codes
-                if (event.code === 1006) {
-                    console.error('WebSocket closed abnormally - possible server issue');
-                } else if (event.code === 1011) {
-                    console.error('WebSocket closed due to server error');
-                }
-                
                 this.updateStatus('Disconnected');
                 this.stopDurationTimer();
             };
             
-            // FIXED: Increased timeout and better error handling
             const connectionTimeout = setTimeout(() => {
                 if (!this.connectionReady) {
                     console.error('WebSocket connection timeout');
@@ -194,31 +185,22 @@ class CallHandler {
                     }
                     reject(new Error('WebSocket connection timeout - server may be unreachable'));
                 }
-            }, 15000); // Increased to 15 seconds
+            }, 15000);
             
-            // Clear timeout on successful connection
             this.ws.addEventListener('open', () => {
                 clearTimeout(connectionTimeout);
             });
         });
     }
 
-    // FIXED: More reliable WebSocket URL construction
     buildWebSocketUrl() {
-        // Use the current page's protocol and host
         const isSecure = window.location.protocol === 'https:';
         const wsProtocol = isSecure ? 'wss:' : 'ws:';
-        
-        // Use window.location.host which includes port automatically
         const host = window.location.host;
-        
-        // Construct the full WebSocket URL
         const wsUrl = `${wsProtocol}//${host}/ws/call/${this.sessionId}`;
-        
         return wsUrl;
     }
 
-    // FIXED: Better message sending with error handling
     sendMessage(message) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             try {
@@ -236,10 +218,7 @@ class CallHandler {
 
     async setupAudioProcessing() {
         try {
-            // Create audio source from media stream
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-            
-            // Create script processor for real-time audio processing
             const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
             
             processor.onaudioprocess = (event) => {
@@ -249,47 +228,35 @@ class CallHandler {
                 
                 const inputBuffer = event.inputBuffer;
                 const inputData = inputBuffer.getChannelData(0);
-                
-                // Process audio in chunks
                 this.processAudioChunk(inputData);
             };
             
-            // Connect audio nodes
             source.connect(processor);
             processor.connect(this.audioContext.destination);
             
-            // Store references
             this.audioSource = source;
             this.audioProcessor = processor;
-            
-            // Start recording
             this.isRecording = true;
             
-            // Setup audio visualization
             this.setupAudioVisualization(source);
             
             console.log('✅ Audio processing setup complete');
             
         } catch (error) {
             console.error('❌ Error setting up audio processing:', error);
-            // Fallback to MediaRecorder
             await this.setupFallbackAudioRecording();
         }
     }
 
     processAudioChunk(audioData) {
         try {
-            // Convert Float32Array to 16-bit PCM
             const pcmData = this.convertToPCM16(audioData);
             
-            // Only send if we have significant audio data
             if (pcmData.length > 0 && this.hasSignificantAudio(audioData)) {
-                // Convert to hex string for transmission
                 const hexString = Array.from(pcmData)
                     .map(b => b.toString(16).padStart(2, '0'))
                     .join('');
                 
-                // FIXED: Use the new sendMessage method
                 const success = this.sendMessage({
                     type: 'audio',
                     data: hexString,
@@ -319,10 +286,9 @@ class CallHandler {
             const view = new DataView(buffer);
             
             for (let i = 0; i < float32Array.length; i++) {
-                // Convert float32 [-1, 1] to int16 [-32768, 32767]
                 let sample = Math.max(-1, Math.min(1, float32Array[i]));
                 sample = sample * 32767;
-                view.setInt16(i * 2, sample, true); // true = little endian
+                view.setInt16(i * 2, sample, true);
             }
             
             return new Uint8Array(buffer);
@@ -333,49 +299,39 @@ class CallHandler {
     }
 
     hasSignificantAudio(audioData) {
-        // Check if audio has significant energy (not just silence/noise)
         const rms = Math.sqrt(audioData.reduce((sum, sample) => sum + sample * sample, 0) / audioData.length);
-        return rms > 0.001; // Threshold for significant audio
+        return rms > 0.001;
     }
 
     async setupFallbackAudioRecording() {
         console.log('🔄 Setting up fallback MediaRecorder...');
         
         try {
-            // Configure MediaRecorder with optimal settings
             const options = {
                 mimeType: 'audio/webm;codecs=opus',
                 audioBitsPerSecond: 16000
             };
             
-            // Fallback mime types if opus not supported
             if (!MediaRecorder.isTypeSupported(options.mimeType)) {
                 options.mimeType = 'audio/webm';
                 if (!MediaRecorder.isTypeSupported(options.mimeType)) {
                     options.mimeType = 'audio/mp4';
                     if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-                        delete options.mimeType; // Use default
+                        delete options.mimeType;
                     }
                 }
             }
             
             this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
             
-            console.log('MediaRecorder configured with:', {
-                mimeType: this.mediaRecorder.mimeType,
-                state: this.mediaRecorder.state
-            });
-            
             this.mediaRecorder.ondataavailable = (event) => {
                 if (event.data.size > 0 && !this.isPaused && !this.isMuted) {
-                    // Convert blob to array buffer and then to hex
                     event.data.arrayBuffer().then(buffer => {
                         const uint8Array = new Uint8Array(buffer);
                         const hexString = Array.from(uint8Array)
                             .map(b => b.toString(16).padStart(2, '0'))
                             .join('');
                         
-                        // FIXED: Use the new sendMessage method
                         this.sendMessage({
                             type: 'audio',
                             data: hexString,
@@ -393,8 +349,7 @@ class CallHandler {
                 console.error('MediaRecorder error:', error);
             };
             
-            // Start recording with small time slices
-            this.mediaRecorder.start(100); // 100ms chunks
+            this.mediaRecorder.start(100);
             this.isRecording = true;
             
             console.log('✅ Fallback MediaRecorder setup complete');
@@ -413,7 +368,6 @@ class CallHandler {
             const canvasCtx = canvas.getContext('2d');
             const analyser = this.audioContext.createAnalyser();
             
-            // Configure analyser
             analyser.fftSize = 256;
             analyser.smoothingTimeConstant = 0.8;
             
@@ -429,19 +383,16 @@ class CallHandler {
                 
                 analyser.getByteFrequencyData(dataArray);
                 
-                // Clear canvas
                 canvasCtx.fillStyle = 'rgb(249, 250, 251)';
                 canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
                 
-                // Draw frequency bars
                 const barWidth = (canvas.width / bufferLength) * 2.5;
                 let x = 0;
                 
                 for (let i = 0; i < bufferLength; i++) {
                     const barHeight = (dataArray[i] / 255) * canvas.height;
                     
-                    // Color based on frequency and amplitude
-                    const hue = (i / bufferLength) * 120; // Blue to green
+                    const hue = (i / bufferLength) * 120;
                     const saturation = 70;
                     const lightness = 30 + (dataArray[i] / 255) * 40;
                     
@@ -465,17 +416,14 @@ class CallHandler {
             
             switch (data.type) {
                 case 'transcript':
-                    console.log('📝 Adding transcript:', data.speaker, data.text);
                     this.addTranscript(data.speaker, data.text);
                     break;
                     
                 case 'audio':
-                    console.log('🔊 Playing audio:', data.data ? data.data.length + ' chars' : 'no data');
                     this.playAudio(data.data);
                     break;
                     
                 case 'status':
-                    console.log('📊 Status update:', data.message);
                     this.updateStatus(data.message);
                     break;
                     
@@ -485,7 +433,6 @@ class CallHandler {
                     break;
                     
                 case 'connected':
-                    console.log('✅ Server confirmed connection:', data);
                     this.updateStatus('Connected to server');
                     break;
                     
@@ -503,8 +450,6 @@ class CallHandler {
 
     addTranscript(speaker, text) {
         try {
-            console.log('📝 Adding transcript entry:', speaker, text);
-            
             const transcriptDiv = document.getElementById('transcript');
             if (!transcriptDiv) {
                 console.error('❌ Transcript div not found');
@@ -533,9 +478,7 @@ class CallHandler {
             transcriptDiv.appendChild(entry);
             transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
             
-            console.log('✅ Transcript entry added successfully');
-            
-            // Limit transcript entries to prevent memory issues
+            // Limit transcript entries
             const entries = transcriptDiv.querySelectorAll('.transcript-entry');
             if (entries.length > 50) {
                 entries[0].remove();
@@ -546,6 +489,7 @@ class CallHandler {
         }
     }
 
+    // FIXED: Complete audio playback method to prevent overlap
     async playAudio(hexData) {
         try {
             if (!hexData || typeof hexData !== 'string') {
@@ -562,189 +506,162 @@ class CallHandler {
             
             console.log('🔊 Audio bytes converted:', bytes.length);
             
-            // FIXED: Use blob approach for Edge-TTS MP3 data
-            try {
-                // Create blob with proper MIME type for MP3
-                const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
-                const audioUrl = URL.createObjectURL(audioBlob);
-                
-                console.log('🔊 Created audio blob URL:', audioUrl);
-                
-                // Create audio element for proper MP3 playback
-                const audioElement = new Audio(audioUrl);
-                
-                // Set playback properties for natural speech
-                audioElement.playbackRate = 1.0;  // Normal speed
-                audioElement.volume = 1.0;        // Full volume
-                audioElement.preservesPitch = true; // Maintain natural pitch
-                
-                // Add event listeners for debugging
-                audioElement.addEventListener('loadstart', () => {
-                    console.log('🔊 Audio loading started');
-                });
-                
-                audioElement.addEventListener('canplay', () => {
-                    console.log('🔊 Audio can start playing');
-                });
-                
-                audioElement.addEventListener('play', () => {
-                    console.log('🔊 Audio playback started');
-                });
-                
-                audioElement.addEventListener('ended', () => {
-                    console.log('🔊 Audio playback finished');
-                    // Clean up URL
-                    URL.revokeObjectURL(audioUrl);
-                });
-                
-                audioElement.addEventListener('error', (e) => {
-                    console.error('🔊 Audio playback error:', e);
-                    URL.revokeObjectURL(audioUrl);
-                });
-                
-                // Play the audio
-                try {
-                    await audioElement.play();
-                    console.log('✅ Audio played successfully with natural speech');
-                } catch (playError) {
-                    console.error('❌ Audio play failed:', playError);
-                    URL.revokeObjectURL(audioUrl);
-                    
-                    // Fallback: try with different MIME type
-                    await this.tryAlternativeAudioPlayback(bytes);
-                }
-                
-            } catch (error) {
-                console.error('❌ Audio blob creation failed:', error);
-                // Try alternative playback method
-                await this.tryAlternativeAudioPlayback(bytes);
+            // CRITICAL FIX: Stop any currently playing audio first
+            await this.stopCurrentAudio();
+            
+            // FIXED: Use ONLY one playback method to prevent overlap
+            const success = await this.playAudioSingle(bytes);
+            
+            if (!success) {
+                console.warn('⚠️ Primary audio playback failed, trying fallback');
+                await this.playAudioFallback(bytes);
             }
             
         } catch (error) {
             console.error('❌ Audio playback error:', error);
+            this.updateStatus('Audio playback failed');
         }
     }
 
-    async tryAlternativeAudioPlayback(bytes) {
-        console.log('🔄 Trying alternative audio playback methods...');
-        
-        // Method 1: Try as WebM
-        try {
-            const webmBlob = new Blob([bytes], { type: 'audio/webm' });
-            const webmUrl = URL.createObjectURL(webmBlob);
-            const webmAudio = new Audio(webmUrl);
-            
-            await webmAudio.play();
-            console.log('✅ Alternative playback (WebM) successful');
-            
-            webmAudio.addEventListener('ended', () => {
-                URL.revokeObjectURL(webmUrl);
-            });
-            
-            return;
-        } catch (webmError) {
-            console.log('⚠️ WebM playback failed:', webmError.message);
+    // NEW: Stop any currently playing audio
+    async stopCurrentAudio() {
+        // Stop any existing audio elements
+        if (this.currentAudioElement) {
+            try {
+                this.currentAudioElement.pause();
+                this.currentAudioElement.currentTime = 0;
+                if (this.currentAudioUrl) {
+                    URL.revokeObjectURL(this.currentAudioUrl);
+                    this.currentAudioUrl = null;
+                }
+            } catch (e) {
+                console.debug('Error stopping audio element:', e);
+            }
+            this.currentAudioElement = null;
         }
         
-        // Method 2: Try as WAV
-        try {
-            const wavBlob = new Blob([bytes], { type: 'audio/wav' });
-            const wavUrl = URL.createObjectURL(wavBlob);
-            const wavAudio = new Audio(wavUrl);
-            
-            await wavAudio.play();
-            console.log('✅ Alternative playback (WAV) successful');
-            
-            wavAudio.addEventListener('ended', () => {
-                URL.revokeObjectURL(wavUrl);
-            });
-            
-            return;
-        } catch (wavError) {
-            console.log('⚠️ WAV playback failed:', wavError.message);
-        }
-        
-        // Method 3: Try with AudioContext (last resort)
-        try {
-            await this.playAudioWithContext(bytes);
-        } catch (contextError) {
-            console.error('❌ All audio playback methods failed:', contextError);
+        // Stop any AudioContext sources
+        if (this.currentAudioSource) {
+            try {
+                this.currentAudioSource.stop();
+                this.currentAudioSource.disconnect();
+            } catch (e) {
+                console.debug('Error stopping audio source:', e);
+            }
+            this.currentAudioSource = null;
         }
     }
 
-    async playAudioWithContext(bytes) {
-        console.log('🔄 Trying AudioContext playback...');
-        
-        if (!this.audioContext) {
-            console.error('❌ AudioContext not available');
-            return;
-        }
-        
+    // NEW: Single audio playback method (no overlap)
+    async playAudioSingle(bytes) {
         try {
-            const audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer.slice());
+            // Create blob with proper MIME type
+            const audioBlob = new Blob([bytes], { type: 'audio/mpeg' });
+            this.currentAudioUrl = URL.createObjectURL(audioBlob);
             
-            // Create source with proper settings
-            const source = this.audioContext.createBufferSource();
-            source.buffer = audioBuffer;
+            console.log('🔊 Created single audio URL:', this.currentAudioUrl);
             
-            // Add gain node to control volume
-            const gainNode = this.audioContext.createGain();
-            gainNode.gain.value = 1.0;
+            // Create audio element with optimal settings
+            this.currentAudioElement = new Audio(this.currentAudioUrl);
             
-            // Connect: source -> gain -> destination
-            source.connect(gainNode);
-            gainNode.connect(this.audioContext.destination);
+            // CRITICAL: Set proper playback properties
+            this.currentAudioElement.playbackRate = this.audioSettings.playbackRate;
+            this.currentAudioElement.volume = this.audioSettings.volume;
+            this.currentAudioElement.preservesPitch = true;
+            this.currentAudioElement.preload = 'auto';
             
-            // Set playback rate to normal (not fast)
-            source.playbackRate.value = 1.0;
-            
-            source.start();
-            console.log('✅ AudioContext playback started');
+            // Add event listeners
+            return new Promise((resolve, reject) => {
+                this.currentAudioElement.addEventListener('canplaythrough', async () => {
+                    try {
+                        console.log('🔊 Audio ready, starting playback...');
+                        await this.currentAudioElement.play();
+                        console.log('✅ Single audio playback started successfully');
+                        resolve(true);
+                    } catch (playError) {
+                        console.error('❌ Play failed:', playError);
+                        reject(playError);
+                    }
+                }, { once: true });
+                
+                this.currentAudioElement.addEventListener('ended', () => {
+                    console.log('🔊 Audio finished playing');
+                    this.cleanupCurrentAudio();
+                    resolve(true);
+                }, { once: true });
+                
+                this.currentAudioElement.addEventListener('error', (e) => {
+                    console.error('🔊 Audio error:', e);
+                    this.cleanupCurrentAudio();
+                    reject(e);
+                }, { once: true });
+                
+                // Start loading
+                this.currentAudioElement.load();
+                
+                // Timeout after 10 seconds
+                setTimeout(() => {
+                    if (this.currentAudioElement && this.currentAudioElement.readyState < 4) {
+                        console.warn('Audio load timeout');
+                        reject(new Error('Audio load timeout'));
+                    }
+                }, 10000);
+            });
             
         } catch (error) {
-            console.error('❌ AudioContext decode failed:', error);
-            throw error;
+            console.error('❌ Single audio playback failed:', error);
+            return false;
         }
     }
 
-    // Add audio quality control methods
-    setAudioQuality(quality = 'normal') {
-        this.audioQuality = quality;
+    // NEW: Fallback audio playback
+    async playAudioFallback(bytes) {
+        console.log('🔄 Using fallback audio playback...');
         
-        const settings = {
-            'low': { volume: 0.8, playbackRate: 1.0 },
-            'normal': { volume: 1.0, playbackRate: 1.0 },
-            'high': { volume: 1.0, playbackRate: 0.95 } // Slightly slower for clarity
-        };
-        
-        this.audioSettings = settings[quality] || settings['normal'];
-        console.log('🔊 Audio quality set to:', quality, this.audioSettings);
+        try {
+            const mimeTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav'];
+            
+            for (const mimeType of mimeTypes) {
+                try {
+                    const audioBlob = new Blob([bytes], { type: mimeType });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    
+                    const audio = new Audio(audioUrl);
+                    audio.playbackRate = 1.0;
+                    audio.volume = 0.9;
+                    
+                    await audio.play();
+                    console.log(`✅ Fallback playback successful with ${mimeType}`);
+                    
+                    audio.addEventListener('ended', () => {
+                        URL.revokeObjectURL(audioUrl);
+                    });
+                    
+                    return true;
+                    
+                } catch (e) {
+                    console.debug(`Fallback failed with ${mimeType}:`, e);
+                    continue;
+                }
+            }
+            
+            console.error('❌ All fallback methods failed');
+            return false;
+            
+        } catch (error) {
+            console.error('❌ Fallback audio error:', error);
+            return false;
+        }
     }
 
-    // Test audio playback with a known good file
-    async testAudioPlayback() {
-        console.log('🧪 Testing audio playback...');
-        
-        // Create a simple test tone
-        const sampleRate = 44100;
-        const duration = 1; // 1 second
-        const frequency = 440; // A note
-        
-        const audioBuffer = this.audioContext.createBuffer(1, sampleRate * duration, sampleRate);
-        const channelData = audioBuffer.getChannelData(0);
-        
-        // Generate sine wave
-        for (let i = 0; i < channelData.length; i++) {
-            channelData[i] = Math.sin(2 * Math.PI * frequency * i / sampleRate) * 0.1;
+    // NEW: Cleanup current audio
+    cleanupCurrentAudio() {
+        if (this.currentAudioUrl) {
+            URL.revokeObjectURL(this.currentAudioUrl);
+            this.currentAudioUrl = null;
         }
-        
-        // Play the test tone
-        const source = this.audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.audioContext.destination);
-        source.start();
-        
-        console.log('🔊 Test tone should be playing (440Hz for 1 second)');
+        this.currentAudioElement = null;
+        this.currentAudioSource = null;
     }
 
     updateStatus(status) {
@@ -778,7 +695,6 @@ class CallHandler {
         }
     }
 
-    // FIXED: Simpler session ID generation
     generateSessionId() {
         return Date.now().toString(36) + Math.random().toString(36).substr(2);
     }
@@ -825,10 +741,8 @@ class CallHandler {
     endCall() {
         console.log('📞 Ending call...');
         
-        // Stop recording
         this.isRecording = false;
         
-        // Stop MediaRecorder if active
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             try {
                 this.mediaRecorder.stop();
@@ -837,7 +751,6 @@ class CallHandler {
             }
         }
         
-        // Disconnect audio nodes
         if (this.audioProcessor) {
             try {
                 this.audioProcessor.disconnect();
@@ -854,7 +767,6 @@ class CallHandler {
             }
         }
         
-        // Stop media stream
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => {
                 try {
@@ -865,12 +777,13 @@ class CallHandler {
             });
         }
         
-        // Send end call message
+        // Stop any playing audio
+        this.stopCurrentAudio();
+        
         this.sendMessage({
             type: 'end_call'
         });
         
-        // Close WebSocket
         if (this.ws) {
             try {
                 this.ws.close();
@@ -881,19 +794,16 @@ class CallHandler {
         
         this.updateStatus('Call ended');
         
-        // Redirect to home after a delay
         setTimeout(() => {
             window.location.href = '/';
         }, 2000);
     }
 
-    // Debug method to enable verbose logging
     enableDebugMode() {
         this.debugMode = true;
         console.log('🐛 Debug mode enabled');
     }
 
-    // FIXED: More comprehensive session statistics
     getSessionStats() {
         return {
             sessionId: this.sessionId,
@@ -917,37 +827,69 @@ class CallHandler {
             }
         };
     }
+
+    // Test method for natural voice
+    testNaturalVoice() {
+        console.log('🧪 Testing natural voice playback...');
+        
+        if (this.isConnected) {
+            this.sendMessage({
+                type: 'text',
+                text: 'Testing natural voice speed. This should sound normal, not fast.',
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            console.error('Not connected - start a call first');
+        }
+    }
+
+    // Set audio quality
+    setAudioQuality(quality = 'natural') {
+        const settings = {
+            'natural': { 
+                volume: 0.9, 
+                playbackRate: 1.0,
+                useCompressor: true 
+            },
+            'clear': { 
+                volume: 0.9, 
+                playbackRate: 1.0,
+                useCompressor: true 
+            },
+            'loud': { 
+                volume: 1.0, 
+                playbackRate: 1.0,
+                useCompressor: false 
+            }
+        };
+        
+        this.audioSettings = settings[quality] || settings['natural'];
+        console.log('🔊 Audio quality set to:', quality, this.audioSettings);
+    }
 }
 
 // Global functions for call interface
 async function startCall() {
     console.log('🎯 Start call clicked');
-    console.log('Current location:', window.location.href);
     
-    // Initialize call handler if not already done
     if (!callHandler) {
-        console.log('Creating new CallHandler instance...');
         callHandler = new CallHandler();
     }
     
-    // Hide start button, show other controls
     document.getElementById('start-call-btn').style.display = 'none';
     document.getElementById('mute-btn').style.display = 'inline-block';
     document.getElementById('pause-btn').style.display = 'inline-block';
     document.getElementById('transfer-btn').style.display = 'inline-block';
     document.getElementById('end-call-btn').style.display = 'inline-block';
     
-    // Update status
     document.getElementById('call-status').textContent = 'Starting...';
     
     try {
-        console.log('Initializing call handler...');
         await callHandler.initialize();
         console.log('✅ Call handler initialized successfully');
     } catch (error) {
         console.error('❌ Failed to start call:', error);
         
-        // Show detailed error message to user
         let errorMessage = 'Failed to start call';
         if (error.message.includes('Permission denied')) {
             errorMessage = 'Microphone access denied. Please allow microphone access and try again.';
@@ -960,7 +902,6 @@ async function startCall() {
         
         document.getElementById('call-status').textContent = errorMessage;
         
-        // Show start button again on error
         document.getElementById('start-call-btn').style.display = 'inline-block';
         document.getElementById('mute-btn').style.display = 'none';
         document.getElementById('pause-btn').style.display = 'none';
@@ -998,7 +939,6 @@ function endCall() {
         callHandler.endCall();
     } else {
         console.warn('Call handler not initialized');
-        // Fallback - just redirect to home
         window.location.href = '/';
     }
 }
@@ -1029,14 +969,13 @@ function showMicrophoneInstructions() {
         4. Refresh this page and try again<br><br>
         
         <strong>For HTTPS issues:</strong><br>
-        • Make sure you're accessing via https:// if available<br>
+        • Make sure you're accessing via https://localhost:8000<br>
         • Accept the security certificate if prompted<br><br>
         
         <button onclick="this.parentElement.remove()" style="background: white; color: #dc2626; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px;">Got it!</button>
     `;
     document.body.appendChild(instructions);
     
-    // Auto-remove after 20 seconds
     setTimeout(() => {
         if (instructions.parentElement) {
             instructions.remove();
@@ -1044,7 +983,6 @@ function showMicrophoneInstructions() {
     }, 20000);
 }
 
-// Debug function to check call handler status
 function checkCallHandler() {
     if (callHandler) {
         console.log('Call Handler Status:', callHandler.getSessionStats());
@@ -1053,11 +991,112 @@ function checkCallHandler() {
     }
 }
 
+// Test functions
+function sendTestMessage(message) {
+    if (callHandler && callHandler.isConnected) {
+        console.log('📤 Sending test message:', message);
+        
+        const success = callHandler.sendMessage({
+            type: 'text',
+            text: message,
+            timestamp: new Date().toISOString()
+        });
+        
+        if (success) {
+            console.log('✅ Test message sent successfully');
+        } else {
+            console.error('❌ Failed to send test message');
+        }
+    } else {
+        console.error('❌ Call handler not connected');
+    }
+}
+
+function testConversation() {
+    if (!callHandler || !callHandler.isConnected) {
+        console.error('❌ Call handler not connected. Start a call first.');
+        return;
+    }
+    
+    console.log('🧪 Starting test conversation...');
+    
+    const testMessages = [
+        "Hello, I need help with my insurance",
+        "I want to file a claim for my car accident",
+        "The accident happened yesterday",
+        "My policy number is AUTO-123456"
+    ];
+    
+    let messageIndex = 0;
+    
+    function sendNextMessage() {
+        if (messageIndex < testMessages.length) {
+            const message = testMessages[messageIndex];
+            console.log(`📝 Test message ${messageIndex + 1}:`, message);
+            sendTestMessage(message);
+            messageIndex++;
+            
+            setTimeout(sendNextMessage, 5000);
+        } else {
+            console.log('✅ Test conversation completed');
+        }
+    }
+    
+    setTimeout(sendNextMessage, 2000);
+}
+
+function checkWebSocketStatus() {
+    if (callHandler) {
+        const stats = callHandler.getSessionStats();
+        console.log('📊 WebSocket Status:', {
+            connected: stats.isConnected,
+            readyState: stats.websocket?.readyState,
+            url: stats.websocket?.url,
+            sessionId: stats.sessionId
+        });
+        
+        const readyStates = {
+            0: 'CONNECTING',
+            1: 'OPEN', 
+            2: 'CLOSING',
+            3: 'CLOSED'
+        };
+        
+        console.log('WebSocket Ready State:', readyStates[stats.websocket?.readyState] || 'UNKNOWN');
+    } else {
+        console.log('❌ Call handler not initialized');
+    }
+}
+
+function debugAudioPlayback() {
+    console.log('🐛 Audio Debug Information:');
+    
+    if (callHandler) {
+        console.log('AudioContext state:', callHandler.audioContext?.state);
+        console.log('AudioContext sample rate:', callHandler.audioContext?.sampleRate);
+        
+        const audio = new Audio();
+        console.log('Browser audio support:');
+        console.log('- MP3:', audio.canPlayType('audio/mpeg'));
+        console.log('- WAV:', audio.canPlayType('audio/wav'));
+        console.log('- WebM:', audio.canPlayType('audio/webm'));
+        console.log('- OGG:', audio.canPlayType('audio/ogg'));
+    } else {
+        console.error('❌ Call handler not available');
+    }
+}
+
+// Add functions to global scope
+window.sendTestMessage = sendTestMessage;
+window.testConversation = testConversation;
+window.checkWebSocketStatus = checkWebSocketStatus;
+window.debugAudioPlayback = debugAudioPlayback;
+window.checkCallHandler = checkCallHandler;
+
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', () => {
     console.log('📄 Page loaded, call handler ready to initialize');
     
-    // Show initial instructions
     setTimeout(() => {
         const status = document.getElementById('call-status');
         if (status && status.textContent === 'Ready to start') {
@@ -1089,306 +1128,13 @@ document.addEventListener('keydown', (event) => {
 // Handle page unload
 window.addEventListener('beforeunload', (event) => {
     if (callHandler && callHandler.isConnected) {
-        // Try to end call gracefully
         callHandler.endCall();
     }
 });
-
-// Test WebSocket connection function for debugging
-async function testWebSocketConnection() {
-    console.log('🧪 Testing WebSocket connection...');
-    
-    const wsUrl = new CallHandler().buildWebSocketUrl();
-    console.log('Testing URL:', wsUrl);
-    
-    try {
-        const testWs = new WebSocket(wsUrl);
-        
-        testWs.onopen = () => {
-            console.log('✅ Test WebSocket connection successful');
-            testWs.close();
-        };
-        
-        testWs.onerror = (error) => {
-            console.error('❌ Test WebSocket connection failed:', error);
-        };
-        
-        testWs.onclose = (event) => {
-            console.log('Test WebSocket closed:', event.code, event.reason);
-        };
-        
-    } catch (error) {
-        console.error('❌ Failed to create test WebSocket:', error);
-    }
-}
-
-
-// Add these test functions to your call_handler.js or call them from browser console
-
-// Test function to send a text message
-function sendTestMessage(message) {
-    if (callHandler && callHandler.isConnected) {
-        console.log('📤 Sending test message:', message);
-        
-        const success = callHandler.sendMessage({
-            type: 'text',
-            text: message,
-            timestamp: new Date().toISOString()
-        });
-        
-        if (success) {
-            console.log('✅ Test message sent successfully');
-        } else {
-            console.error('❌ Failed to send test message');
-        }
-    } else {
-        console.error('❌ Call handler not connected');
-    }
-}
-
-// Test conversation flow
-function testConversation() {
-    if (!callHandler || !callHandler.isConnected) {
-        console.error('❌ Call handler not connected. Start a call first.');
-        return;
-    }
-    
-    console.log('🧪 Starting test conversation...');
-    
-    const testMessages = [
-        "Hello, I need help with my insurance",
-        "I want to file a claim for my car accident",
-        "The accident happened yesterday",
-        "My policy number is AUTO-123456"
-    ];
-    
-    let messageIndex = 0;
-    
-    function sendNextMessage() {
-        if (messageIndex < testMessages.length) {
-            const message = testMessages[messageIndex];
-            console.log(`📝 Test message ${messageIndex + 1}:`, message);
-            sendTestMessage(message);
-            messageIndex++;
-            
-            // Send next message after 5 seconds
-            setTimeout(sendNextMessage, 5000);
-        } else {
-            console.log('✅ Test conversation completed');
-        }
-    }
-    
-    // Start sending messages after 2 seconds
-    setTimeout(sendNextMessage, 2000);
-}
-
-// Debug function to check WebSocket status
-function checkWebSocketStatus() {
-    if (callHandler) {
-        const stats = callHandler.getSessionStats();
-        console.log('📊 WebSocket Status:', {
-            connected: stats.isConnected,
-            readyState: stats.websocket?.readyState,
-            url: stats.websocket?.url,
-            sessionId: stats.sessionId
-        });
-        
-        // WebSocket ready states
-        const readyStates = {
-            0: 'CONNECTING',
-            1: 'OPEN', 
-            2: 'CLOSING',
-            3: 'CLOSED'
-        };
-        
-        console.log('WebSocket Ready State:', readyStates[stats.websocket?.readyState] || 'UNKNOWN');
-    } else {
-        console.log('❌ Call handler not initialized');
-    }
-}
-
-// Function to manually trigger agent response (for testing)
-function triggerAgentResponse() {
-    if (callHandler && callHandler.isConnected) {
-        console.log('🤖 Triggering manual agent response...');
-        
-        callHandler.sendMessage({
-            type: 'test',
-            action: 'trigger_response',
-            message: 'Manual trigger for testing'
-        });
-    }
-}
-
-// Add to window for easy access in console
-window.sendTestMessage = sendTestMessage;
-window.testConversation = testConversation;
-window.checkWebSocketStatus = checkWebSocketStatus;
-window.triggerAgentResponse = triggerAgentResponse;
 
 console.log('🧪 Test functions loaded. Available commands:');
 console.log('- sendTestMessage("your message here")');
 console.log('- testConversation()');
 console.log('- checkWebSocketStatus()'); 
-console.log('- triggerAgentResponse()');
-
-
-// Add these debug functions to your call_handler.js
-
-// Debug function to inspect WebSocket messages
-function enableWebSocketDebug() {
-    if (callHandler && callHandler.ws) {
-        const originalOnMessage = callHandler.ws.onmessage;
-        
-        callHandler.ws.onmessage = (event) => {
-            console.log('🐛 Raw WebSocket message received:', event.data);
-            
-            try {
-                const data = JSON.parse(event.data);
-                console.log('🐛 Parsed WebSocket data:', data);
-                
-                // Check specifically for transcript messages
-                if (data.type === 'transcript') {
-                    console.log('🐛 Transcript message details:', {
-                        speaker: data.speaker,
-                        text: data.text,
-                        timestamp: data.timestamp
-                    });
-                }
-                
-                // Check for audio messages  
-                if (data.type === 'audio') {
-                    console.log('🐛 Audio message details:', {
-                        dataLength: data.data ? data.data.length : 'no data',
-                        hasData: !!data.data
-                    });
-                }
-                
-            } catch (error) {
-                console.error('🐛 Error parsing WebSocket message:', error);
-            }
-            
-            // Call original handler
-            if (originalOnMessage) {
-                originalOnMessage.call(callHandler.ws, event);
-            }
-        };
-        
-        console.log('🐛 WebSocket debug mode enabled');
-    } else {
-        console.error('❌ Call handler or WebSocket not available');
-    }
-}
-
-// Function to manually check transcript div
-function checkTranscriptDiv() {
-    const transcriptDiv = document.getElementById('transcript');
-    console.log('🐛 Transcript div check:', {
-        exists: !!transcriptDiv,
-        children: transcriptDiv ? transcriptDiv.children.length : 'N/A',
-        innerHTML: transcriptDiv ? transcriptDiv.innerHTML : 'N/A'
-    });
-    
-    if (transcriptDiv) {
-        const entries = transcriptDiv.querySelectorAll('.transcript-entry');
-        console.log('🐛 Transcript entries:', entries.length);
-        
-        entries.forEach((entry, index) => {
-            const speaker = entry.querySelector('.speaker');
-            const text = entry.querySelector('.text');
-            console.log(`🐛 Entry ${index}:`, {
-                speaker: speaker ? speaker.textContent : 'no speaker',
-                text: text ? text.textContent : 'no text'
-            });
-        });
-    }
-}
-
-// Function to manually add a test transcript entry
-function addTestTranscript() {
-    if (callHandler) {
-        callHandler.addTranscript('agent', 'This is a test response from the agent to verify transcript display is working.');
-        console.log('✅ Test transcript entry added');
-    } else {
-        console.error('❌ Call handler not available');
-    }
-}
-
-// Function to send a simple test and wait for response
-async function sendTestAndWait() {
-    console.log('🧪 Sending test message and waiting for response...');
-    
-    if (!callHandler || !callHandler.isConnected) {
-        console.error('❌ Not connected');
-        return;
-    }
-    
-    // Clear console for clean output
-    console.clear();
-    console.log('🧪 Test started - sending message...');
-    
-    // Enable debug mode
-    enableWebSocketDebug();
-    
-    // Send test message
-    sendTestMessage("Hello, I need help with my insurance claim");
-    
-    // Wait and check results
-    setTimeout(() => {
-        console.log('🧪 Checking results after 3 seconds...');
-        checkTranscriptDiv();
-    }, 3000);
-}
-
-// Add functions to global scope
-window.enableWebSocketDebug = enableWebSocketDebug;
-window.checkTranscriptDiv = checkTranscriptDiv;
-window.addTestTranscript = addTestTranscript;
-window.sendTestAndWait = sendTestAndWait;
-
-console.log('🐛 Debug functions loaded:');
-console.log('- enableWebSocketDebug() - See raw WebSocket messages');
-console.log('- checkTranscriptDiv() - Check transcript DOM state');
-console.log('- addTestTranscript() - Add a test transcript entry');
-console.log('- sendTestAndWait() - Send test message and debug response');
-
-
-// Additional debugging functions for audio
-function debugAudioPlayback() {
-    console.log('🐛 Audio Debug Information:');
-    
-    if (callHandler) {
-        console.log('AudioContext state:', callHandler.audioContext?.state);
-        console.log('AudioContext sample rate:', callHandler.audioContext?.sampleRate);
-        
-        // Test if browser supports different audio formats
-        const audio = new Audio();
-        console.log('Browser audio support:');
-        console.log('- MP3:', audio.canPlayType('audio/mpeg'));
-        console.log('- WAV:', audio.canPlayType('audio/wav'));
-        console.log('- WebM:', audio.canPlayType('audio/webm'));
-        console.log('- OGG:', audio.canPlayType('audio/ogg'));
-        
-        // Test audio playback
-        callHandler.testAudioPlayback();
-    } else {
-        console.error('❌ Call handler not available');
-    }
-}
-
-// Function to adjust TTS playback speed
-function setTTSSpeed(speed = 1.0) {
-    if (callHandler) {
-        callHandler.ttsPlaybackRate = speed;
-        console.log('🔊 TTS playback rate set to:', speed);
-        console.log('(1.0 = normal, 0.8 = slower, 1.2 = faster)');
-    }
-}
-
-// Add to global scope
-window.debugAudioPlayback = debugAudioPlayback;
-window.setTTSSpeed = setTTSSpeed;
-
-console.log('🔊 Audio fix loaded. New functions:');
-console.log('- debugAudioPlayback() - Check audio capabilities');
-console.log('- setTTSSpeed(0.8) - Slow down TTS (0.5-2.0)');
+console.log('- debugAudioPlayback()');
+console.log('- checkCallHandler()');

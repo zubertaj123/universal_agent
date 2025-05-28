@@ -83,3 +83,15 @@ cython_debug/
 # Ignore system files
 Thumbs.db
 ehthumbs.db
+
+# Ignore database files
+*.db
+*.db-shm
+*.db-wal
+# Ignore backup files
+*.bak
+# Ignore temporary files
+*.tmp
+# Ignore IDE specific files
+.idea/
+

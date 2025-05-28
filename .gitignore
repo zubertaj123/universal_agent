@@ -95,3 +95,4 @@ ehthumbs.db
 # Ignore IDE specific files
 .idea/
 
+data/db/call_center.db

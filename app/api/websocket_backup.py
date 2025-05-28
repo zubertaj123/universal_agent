@@ -1,5 +1,5 @@
 """
-WebSocket endpoints for real-time communication - FIXED with Natural Audio
+WebSocket endpoints for real-time communication - Complete Fixed Version
 """
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 import asyncio
@@ -23,11 +23,10 @@ from sqlalchemy import select
 
 logger = setup_logger(__name__)
 
-# FIXED: Create the router that was missing
 websocket_router = APIRouter()
 
 class CallSession:
-    """Manages a single call session - FIXED with Natural Audio"""
+    """Manages a single call session - Fixed Version"""
     
     def __init__(self, session_id: str, websocket: WebSocket):
         self.session_id = session_id
@@ -48,9 +47,11 @@ class CallSession:
             self.audio_chunk_count += 1
             self.last_audio_time = datetime.now()
             
+            # Log audio data info for debugging
             if self.audio_chunk_count % 100 == 0:
                 logger.debug(f"Processing audio chunk #{self.audio_chunk_count}, size: {len(audio_bytes)} bytes")
             
+            # Decode and resample browser audio with improved error handling
             try:
                 audio_pcm = self.audio_processor.decode_and_resample_browser_audio(audio_bytes)
             except Exception as e:
@@ -61,11 +62,14 @@ class CallSession:
                 logger.debug("No audio data returned from decoder")
                 return None
 
+            # CRITICAL: Ensure float32 type for STT
             if audio_pcm.dtype != np.float32:
                 audio_pcm = audio_pcm.astype(np.float32)
 
+            # Buffer audio until we have enough for processing
             self.audio_buffer.append(audio_pcm)
             
+            # Combine buffered audio
             try:
                 buffered = np.concatenate(self.audio_buffer) if self.audio_buffer else audio_pcm
             except ValueError as e:
@@ -73,6 +77,7 @@ class CallSession:
                 self.audio_buffer = [audio_pcm]
                 buffered = audio_pcm
 
+            # Process in chunks for better real-time performance
             min_chunk_size = 512
             if len(buffered) >= min_chunk_size:
                 try:
@@ -83,7 +88,9 @@ class CallSession:
                     else:
                         self.audio_buffer = []
                     
+                    # Preprocess the audio chunk with float32 ensure
                     processed_audio = self.audio_processor.preprocess_audio(chunk_to_process)
+                    
                     return processed_audio
                     
                 except Exception as e:
@@ -159,7 +166,7 @@ async def websocket_call(
     websocket: WebSocket,
     session_id: Optional[str] = None
 ):
-    """WebSocket endpoint for call handling - FIXED with Proper Greeting"""
+    """WebSocket endpoint for call handling - Fixed Version"""
     logger.info("WebSocket endpoint hit")
     if not session_id:
         session_id = str(uuid.uuid4())
@@ -175,11 +182,9 @@ async def websocket_call(
     # Create call session
     session = CallSession(session_id, websocket)
     
-    # Initialize speech service FIRST
+    # Initialize speech service
     try:
-        logger.info("Initializing speech service...")
         await speech_service.initialize()
-        logger.info("Speech service initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize speech service: {e}")
         await websocket.send_json({
@@ -211,16 +216,15 @@ async def websocket_call(
     tasks = []
     
     try:
-        # FIXED: Send initial greeting with proper natural voice
+        # Send initial greeting with consistent voice
         greeting = "Hello! Thank you for calling. I'm your AI assistant and I can help you with insurance claims, policy questions, or connect you with a human agent. What can I help you with today?"
-        
-        logger.info("Sending initial greeting...")
-        
-        # Send transcript first
         await send_message_to_client(websocket, "transcript", {
             "speaker": "agent",
             "text": greeting
         })
+        
+        # Generate and send TTS for greeting with consistent settings
+        await generate_and_send_tts(websocket, speech_service, greeting, "en-US-JennyNeural")
         
         # Add greeting to conversation
         agent_state["messages"].append({
@@ -229,40 +233,16 @@ async def websocket_call(
             "timestamp": datetime.now().isoformat()
         })
         
-        # CRITICAL FIX: Generate natural TTS greeting with error handling
-        try:
-            logger.info("Generating natural greeting audio...")
-            success = await generate_and_send_natural_tts(
-                websocket, 
-                speech_service, 
-                greeting, 
-                "friendly"
-            )
-            
-            if success:
-                logger.info("✅ Greeting audio sent successfully")
-            else:
-                logger.error("❌ Failed to send greeting audio")
-                # Send fallback message
-                await websocket.send_json({
-                    "type": "status",
-                    "message": "Connected - audio system ready"
-                })
-                
-        except Exception as greeting_error:
-            logger.error(f"Greeting audio generation failed: {greeting_error}")
-            
-            # Send text-only greeting as fallback
-            await websocket.send_json({
-                "type": "status", 
-                "message": "Connected - please type your message or speak"
-            })
-        
         # Start background tasks
         agent_task = asyncio.create_task(
             run_agent_loop(agent, agent_state, session, speech_service, websocket)
         )
         tasks.append(agent_task)
+        
+        audio_output_task = asyncio.create_task(
+            handle_audio_output(agent_state["audio_queue"], websocket, speech_service)
+        )
+        tasks.append(audio_output_task)
         
         # Main message loop
         while session.is_active:
@@ -326,7 +306,7 @@ async def handle_websocket_message(
     if message_type == "audio":
         await handle_audio_message(message, session, agent_state, speech_service, websocket)
     elif message_type == "text":
-        await handle_text_message_with_natural_response(message, session, agent_state, speech_service, websocket)
+        await handle_text_message(message, session, agent_state, websocket)
     elif message_type == "control":
         await handle_control_message(message, session, websocket)
     elif message_type == "end_call":
@@ -341,147 +321,47 @@ async def handle_websocket_message(
             "message": f"Unknown message type: {message_type}"
         })
 
-# FIXED: Natural TTS Generation Function
-async def generate_and_send_natural_tts(
-    websocket: WebSocket,
-    speech_service: SpeechService,
-    text: str,
-    voice_style: str = "friendly"
-) -> bool:
-    """
-    Generate and send TTS audio with FIXED natural playback
-    This fixes the robotic/high-speed audio issue
-    """
-    try:
-        if not text.strip():
-            return False
-            
-        logger.info(f"Generating NATURAL TTS for: '{text[:50]}...'")
-        
-        # Set natural voice settings
-        speech_service.set_voice(voice_style)
-        
-        # CRITICAL FIX: Send audio metadata first
-        await websocket.send_json({
-            "type": "audio_start",
-            "text": text,
-            "voice": voice_style,
-            "natural_playback": True,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Generate audio with natural settings
-        chunk_count = 0
-        total_bytes = 0
-        
-        # FIXED: Use natural synthesis method
-        async for audio_chunk in speech_service.synthesize_natural(text, stream=True):
-            if audio_chunk and len(audio_chunk) > 0:
-                chunk_count += 1
-                total_bytes += len(audio_chunk)
-                
-                # CRITICAL FIX: Send with proper headers for natural playback
-                await websocket.send_json({
-                    "type": "audio_chunk",
-                    "data": audio_chunk.hex(),
-                    "chunk_number": chunk_count,
-                    "chunk_size": len(audio_chunk),
-                    "format": "mp3",
-                    "natural_timing": True,  # Signal for natural playback
-                    "playback_rate": 1.0,    # Ensure normal speed
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                # IMPORTANT: Natural timing between chunks
-                await asyncio.sleep(0.05)  # 50ms delay for smooth playback
-        
-        # Send completion signal
-        await websocket.send_json({
-            "type": "audio_complete",
-            "chunks_sent": chunk_count,
-            "total_bytes": total_bytes,
-            "natural_completion": True,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        logger.info(f"NATURAL TTS completed: {chunk_count} chunks, {total_bytes} bytes")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Natural TTS generation failed: {e}")
-        
-        # Send error notification
-        await websocket.send_json({
-            "type": "audio_error",
-            "message": "Natural audio generation failed",
-            "timestamp": datetime.now().isoformat()
-        })
-        return False
-
-async def handle_text_message_with_natural_response(
+async def handle_connection_message(
     message: dict,
     session: CallSession,
-    agent_state: AgentState,
-    speech_service: SpeechService,
     websocket: WebSocket
 ):
-    """Handle text message and respond with natural audio"""
+    """Handle connection initialization message"""
     try:
-        text = message.get("text", "").strip()
-        if not text:
-            return
-            
-        logger.info(f"Processing text with natural response: '{text}'")
+        session_id = message.get("sessionId", "unknown")
+        timestamp = message.get("timestamp")
         
-        # Add to conversation
-        agent_state["messages"].append({
-            "role": "user",
-            "content": text,
-            "timestamp": datetime.now().isoformat()
+        logger.info(f"Connection message received from session: {session_id}")
+        
+        # Send acknowledgment
+        await send_message_to_client(websocket, "connected", {
+            "sessionId": session_id,
+            "status": "acknowledged",
+            "server_time": datetime.now().isoformat()
         })
-        
-        # Generate agent response (simplified for demo)
-        if "claim" in text.lower():
-            response = "I'd be happy to help you with your insurance claim. Could you please provide me with your policy number and details about the incident?"
-        elif "hello" in text.lower() or "hi" in text.lower():
-            response = "Hello! Thank you for calling. I'm here to help you with your insurance needs. What can I assist you with today?"
-        elif "help" in text.lower():
-            response = "I'm here to help you with insurance claims, policy questions, and general support. What specific assistance do you need?"
-        else:
-            response = "I understand. Let me help you with that. Could you please provide me with more details so I can assist you better?"
-        
-        # Send transcript
-        await websocket.send_json({
-            "type": "transcript",
-            "speaker": "agent",
-            "text": response,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Add agent response to conversation
-        agent_state["messages"].append({
-            "role": "assistant", 
-            "content": response,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # FIXED: Generate natural TTS response
-        success = await generate_and_send_natural_tts(
-            websocket, 
-            speech_service, 
-            response, 
-            "friendly"
-        )
-        
-        if success:
-            logger.info("Natural audio response sent successfully")
-        else:
-            logger.error("Failed to send natural audio response")
         
     except Exception as e:
-        logger.error(f"Error handling text message: {e}")
+        logger.error(f"Error handling connection message: {e}")
 
-# Keep all your existing functions but add these new ones
+async def handle_test_message(
+    message: dict,
+    session: CallSession,
+    websocket: WebSocket
+):
+    """Handle test messages for debugging"""
+    try:
+        logger.info(f"Test message received: {message}")
+        
+        # Echo back the test message
+        await send_message_to_client(websocket, "test_response", {
+            "original_message": message,
+            "server_time": datetime.now().isoformat(),
+            "session_id": session.session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Error handling test message: {e}")
+
 async def handle_audio_message(
     message: dict,
     session: CallSession,
@@ -496,6 +376,7 @@ async def handle_audio_message(
             logger.debug("Empty audio data received")
             return
             
+        # Convert hex string to bytes with error handling
         try:
             audio_bytes = bytes.fromhex(audio_data)
         except ValueError as e:
@@ -508,6 +389,7 @@ async def handle_audio_message(
         
         logger.debug(f"Processing audio chunk: {len(audio_bytes)} bytes")
             
+        # Process audio stream with improved error handling
         try:
             processed_audio = await session.handle_audio_stream(audio_bytes)
         except Exception as e:
@@ -517,20 +399,24 @@ async def handle_audio_message(
         # Only proceed with transcription if we have valid audio
         if processed_audio is not None and len(processed_audio) > 0:
             try:
+                # FIXED: Ensure audio is float32 before VAD
                 if processed_audio.dtype != np.float32:
                     processed_audio = processed_audio.astype(np.float32)
                 
+                # Check for voice activity with fallback
                 has_speech = False
                 try:
                     has_speech = speech_service.detect_voice_activity(processed_audio)
                 except Exception as e:
                     logger.warning(f"VAD failed: {e}, using basic energy detection")
+                    # Fallback to simple energy-based detection
                     rms_energy = np.sqrt(np.mean(processed_audio**2))
-                    has_speech = rms_energy > 0.005
+                    has_speech = rms_energy > 0.005  # Adjusted threshold
                 
                 if has_speech:
                     logger.info("Speech detected, attempting transcription")
                     
+                    # FIXED: Transcribe audio with proper error handling
                     transcription = None
                     try:
                         transcription = await asyncio.wait_for(
@@ -542,25 +428,53 @@ async def handle_audio_message(
                     except Exception as e:
                         logger.error(f"Transcription failed: {e}")
                     
+                    # Process transcription if successful
                     if transcription and transcription.strip():
                         logger.info(f"Transcribed: '{transcription}'")
                         
+                        # Send transcript to client
                         await send_message_to_client(websocket, "transcript", {
                             "speaker": "user",
                             "text": transcription
                         })
                         
+                        # Add to agent state
                         agent_state["messages"].append({
                             "role": "user",
                             "content": transcription,
                             "timestamp": datetime.now().isoformat()
                         })
                         
+                        # Trigger agent processing
                         agent_state["current_speaker"] = "user"
+                        
                         logger.info("Agent processing triggered")
                         
                     else:
                         logger.debug("No transcription result or empty text")
+                        
+                        # For testing: simulate user input occasionally
+                        if hasattr(session, 'test_counter'):
+                            session.test_counter += 1
+                        else:
+                            session.test_counter = 1
+                            
+                        if session.test_counter % 200 == 0:  # Every 200 chunks for testing
+                            test_message = "I need help with my insurance claim"
+                            logger.info(f"Simulating user input for testing: {test_message}")
+                            
+                            await send_message_to_client(websocket, "transcript", {
+                                "speaker": "user", 
+                                "text": test_message
+                            })
+                            
+                            agent_state["messages"].append({
+                                "role": "user",
+                                "content": test_message,
+                                "timestamp": datetime.now().isoformat()
+                            })
+                            
+                            agent_state["current_speaker"] = "user"
                 else:
                     logger.debug("No speech detected in audio chunk")
             except Exception as e:
@@ -574,6 +488,52 @@ async def handle_audio_message(
             "message": "Error processing audio - continuing with demo mode"
         })
 
+async def handle_text_message(
+    message: dict,
+    session: CallSession,
+    agent_state: AgentState,
+    websocket: WebSocket
+):
+    """Handle text message from client - IMPROVED"""
+    try:
+        text = message.get("text", "").strip()
+        if not text:
+            return
+            
+        logger.info(f"Received text message: '{text}'")
+        
+        # Send transcript confirmation
+        await send_message_to_client(websocket, "transcript", {
+            "speaker": "user",
+            "text": text
+        })
+        
+        # Add to agent state
+        agent_state["messages"].append({
+            "role": "user",
+            "content": text,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Update call record
+        try:
+            await session.update_call_record(
+                transcript=agent_state["messages"]
+            )
+        except Exception as e:
+            logger.error(f"Failed to update call record: {e}")
+        
+        # Trigger agent processing
+        agent_state["current_speaker"] = "user"
+        
+        logger.info("Agent processing triggered from text message")
+        
+    except Exception as e:
+        logger.error(f"Error handling text message: {e}")
+        await send_message_to_client(websocket, "error", {
+            "message": "Error processing text message"
+        })
+
 async def run_agent_loop(
     agent: CallCenterAgent,
     state: AgentState,
@@ -582,8 +542,9 @@ async def run_agent_loop(
     websocket: WebSocket
 ):
     """Run the agent processing loop - FIXED for TTS consistency"""
-    logger.info("Starting agent processing loop with natural TTS")
+    logger.info("Starting agent processing loop with consistent TTS")
     
+    # Main processing loop
     last_message_count = 0
     
     while session.is_active and state["call_status"] not in ["ended", "ending"]:
@@ -593,12 +554,15 @@ async def run_agent_loop(
             if current_message_count > last_message_count:
                 logger.debug(f"Message count changed: {last_message_count} -> {current_message_count}")
                 
+                # Check if the last message is from user and we haven't responded yet
                 if (state["messages"] and 
                     state["messages"][-1].get("role") == "user"):
                     
+                    # Check if we already have a response
                     user_message_time = state["messages"][-1].get("timestamp")
                     needs_response = True
                     
+                    # Look for agent response after this user message
                     for i in range(len(state["messages"]) - 1, -1, -1):
                         msg = state["messages"][i]
                         if (msg.get("role") == "assistant" and 
@@ -614,25 +578,33 @@ async def run_agent_loop(
                         user_message = state["messages"][-1].get("content", "")
                         logger.info(f"User said: '{user_message}'")
                         
+                        # Set state for agent processing
                         state["current_speaker"] = "user"
                         
                         try:
+                            # Run agent workflow
                             logger.debug("Running agent workflow...")
                             updated_state = await agent.run(state)
+                            
+                            # Update state
                             state.update(updated_state)
+                            
                             logger.debug("Agent workflow completed")
                             
                         except Exception as e:
                             logger.error(f"Agent workflow error: {e}")
                             
+                            # Fallback response
                             fallback_response = "I apologize, I'm having trouble processing your request right now. Could you please tell me more about what you need assistance with?"
                             
+                            # Add fallback response
                             state["messages"].append({
                                 "role": "assistant", 
                                 "content": fallback_response,
                                 "timestamp": datetime.now().isoformat()
                             })
                         
+                        # Check if agent generated a response
                         if (len(state["messages"]) > current_message_count and
                             state["messages"][-1].get("role") == "assistant"):
                             
@@ -640,17 +612,19 @@ async def run_agent_loop(
                             if response_text.strip():
                                 logger.info(f"Agent response: '{response_text}'")
                                 
+                                # Send transcript
                                 await send_message_to_client(websocket, "transcript", {
                                     "speaker": "agent", 
                                     "text": response_text
                                 })
                                 
-                                # FIXED: Always use natural TTS
+                                # FIXED: Always use consistent TTS
                                 try:
-                                    await generate_and_send_natural_tts(websocket, speech_service, response_text, "friendly")
+                                    await generate_and_send_tts(websocket, speech_service, response_text, "en-US-JennyNeural")
                                 except Exception as e:
-                                    logger.error(f"Natural TTS generation failed: {e}")
+                                    logger.error(f"TTS generation failed: {e}")
                                 
+                                # Update call record
                                 try:
                                     await session.update_call_record(
                                         transcript=state["messages"]
@@ -658,8 +632,10 @@ async def run_agent_loop(
                                 except Exception as e:
                                     logger.error(f"Failed to update call record: {e}")
                                 
+                                # Reset speaker state
                                 state["current_speaker"] = "waiting"
-                                logger.info("Agent response sent with natural voice")
+                                
+                                logger.info("Agent response sent with consistent voice")
                             else:
                                 logger.warning("Agent generated empty response")
                         else:
@@ -667,47 +643,20 @@ async def run_agent_loop(
                 
                 last_message_count = current_message_count
             
+            # Small delay to prevent tight loop
             await asyncio.sleep(0.1)
             
         except Exception as e:
             logger.error(f"Agent loop error: {e}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(1)  # Longer delay on error
     
     logger.info("Agent processing loop ended")
 
-# Keep all other existing functions...
-async def handle_connection_message(message: dict, session: CallSession, websocket: WebSocket):
-    """Handle connection initialization message"""
-    try:
-        session_id = message.get("sessionId", "unknown")
-        timestamp = message.get("timestamp")
-        
-        logger.info(f"Connection message received from session: {session_id}")
-        
-        await send_message_to_client(websocket, "connected", {
-            "sessionId": session_id,
-            "status": "acknowledged",
-            "server_time": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        logger.error(f"Error handling connection message: {e}")
-
-async def handle_test_message(message: dict, session: CallSession, websocket: WebSocket):
-    """Handle test messages for debugging"""
-    try:
-        logger.info(f"Test message received: {message}")
-        
-        await send_message_to_client(websocket, "test_response", {
-            "original_message": message,
-            "server_time": datetime.now().isoformat(),
-            "session_id": session.session_id
-        })
-        
-    except Exception as e:
-        logger.error(f"Error handling test message: {e}")
-
-async def handle_control_message(message: dict, session: CallSession, websocket: WebSocket):
+async def handle_control_message(
+    message: dict,
+    session: CallSession,
+    websocket: WebSocket
+):
     """Handle control messages (mute, pause, etc.)"""
     try:
         action = message.get("action")
@@ -738,7 +687,12 @@ async def handle_control_message(message: dict, session: CallSession, websocket:
     except Exception as e:
         logger.error(f"Error handling control message: {e}")
 
-async def handle_end_call(message: dict, session: CallSession, agent_state: AgentState, websocket: WebSocket):
+async def handle_end_call(
+    message: dict,
+    session: CallSession,
+    agent_state: AgentState,
+    websocket: WebSocket
+):
     """Handle call end request"""
     try:
         logger.info(f"Call end requested for session {session.session_id}")
@@ -746,6 +700,7 @@ async def handle_end_call(message: dict, session: CallSession, agent_state: Agen
         agent_state["call_status"] = "ending"
         session.is_active = False
         
+        # Send farewell message
         farewell = "Thank you for calling. Have a great day!"
         await send_message_to_client(websocket, "transcript", {
             "speaker": "agent",
@@ -759,6 +714,39 @@ async def handle_end_call(message: dict, session: CallSession, agent_state: Agen
     except Exception as e:
         logger.error(f"Error handling end call: {e}")
 
+async def handle_audio_output(
+    audio_queue: asyncio.Queue,
+    websocket: WebSocket,
+    speech_service: SpeechService
+):
+    """Handle audio output from agent"""
+    logger.info("Starting audio output handler")
+    
+    while True:
+        try:
+            # Get audio request from queue
+            audio_request = await asyncio.wait_for(audio_queue.get(), timeout=1.0)
+            
+            if audio_request["type"] == "speech":
+                text = audio_request["content"]
+                voice_style = audio_request.get("voice_style", "en-US-JennyNeural")
+                
+                logger.debug(f"Generating TTS for: {text[:50]}...")
+                
+                # Generate and stream TTS with consistent settings
+                await generate_and_send_tts(websocket, speech_service, text, voice_style)
+                
+                logger.debug("TTS audio sent to client")
+                
+        except asyncio.TimeoutError:
+            # No audio requests, continue
+            continue
+        except Exception as e:
+            logger.error(f"Audio output error: {e}")
+            break
+    
+    logger.info("Audio output handler ended")
+
 async def send_message_to_client(websocket: WebSocket, message_type: str, data: dict):
     """Send message to WebSocket client"""
     try:
@@ -771,6 +759,86 @@ async def send_message_to_client(websocket: WebSocket, message_type: str, data: 
     except Exception as e:
         logger.error(f"Error sending message to client: {e}")
 
+async def generate_and_send_tts(
+    websocket: WebSocket,
+    speech_service: SpeechService,
+    text: str,
+    voice_style: str = "en-US-JennyNeural"
+):
+    """Generate TTS and send audio to client - FIXED for consistency"""
+    try:
+        if not text.strip():
+            return
+            
+        logger.info(f"Generating consistent TTS for: '{text[:50]}...'")
+        
+        # CRITICAL: Always use the same voice and settings
+        consistent_voice = "en-US-JennyNeural"  # Force consistent voice
+        consistent_rate = "-8%"  # Slightly slower for natural speech
+        consistent_pitch = "+0Hz"  # Natural pitch
+        
+        # Set voice style for consistency
+        speech_service.set_voice(consistent_voice)
+        
+        # Generate audio with consistent settings
+        chunk_count = 0
+        total_bytes = 0
+        
+        logger.debug(f"Using consistent settings: voice={consistent_voice}, rate={consistent_rate}")
+        
+        async for audio_chunk in speech_service.synthesize(
+            text, 
+            voice=consistent_voice,
+            rate=consistent_rate,
+            pitch=consistent_pitch,
+            stream=True
+        ):
+            if audio_chunk and len(audio_chunk) > 0:
+                chunk_count += 1
+                total_bytes += len(audio_chunk)
+                
+                # Convert to hex for transmission
+                hex_data = audio_chunk.hex()
+                
+                # Send audio chunk with consistency markers
+                await websocket.send_json({
+                    "type": "audio",
+                    "data": hex_data,
+                    "chunk": chunk_count,
+                    "format": "mp3",
+                    "voice": consistent_voice,
+                    "rate": consistent_rate,
+                    "pitch": consistent_pitch,
+                    "consistency": "natural"  # Consistency marker
+                })
+                
+                # Controlled delay for smooth playback
+                await asyncio.sleep(0.02)  # 20ms delay
+        
+        logger.info(f"Consistent TTS sent: {chunk_count} chunks, {total_bytes} bytes")
+        
+        # Send completion marker
+        await websocket.send_json({
+            "type": "audio_complete",
+            "chunks_sent": chunk_count,
+            "total_bytes": total_bytes,
+            "voice_consistency": "maintained",
+            "settings": {
+                "voice": consistent_voice,
+                "rate": consistent_rate,
+                "pitch": consistent_pitch
+            }
+        })
+            
+    except Exception as e:
+        logger.error(f"Consistent TTS generation error: {e}")
+        
+        # Send error notification
+        await websocket.send_json({
+            "type": "audio_error",
+            "message": "TTS generation failed - maintaining consistency"
+        })
+
 async def finalize_call_record(session: CallSession, agent_state: AgentState):
     """Finalize call record when call ends"""
     try:
@@ -780,9 +848,11 @@ async def finalize_call_record(session: CallSession, agent_state: AgentState):
         end_time = datetime.now()
         duration = int((end_time - session.start_time).total_seconds())
         
+        # Extract call summary information
         customer_info = agent_state.get("customer_info", {})
         claim_data = agent_state.get("claim_data", {})
         
+        # Determine sentiment
         emotions = agent_state.get("intent_history", [])
         overall_sentiment = "neutral"
         if "frustrated" in emotions:
@@ -790,6 +860,7 @@ async def finalize_call_record(session: CallSession, agent_state: AgentState):
         elif "satisfied" in emotions:
             overall_sentiment = "positive"
         
+        # Create summary
         summary = {
             "total_messages": len(agent_state.get("messages", [])),
             "customer_identified": bool(customer_info),
@@ -799,6 +870,7 @@ async def finalize_call_record(session: CallSession, agent_state: AgentState):
             "resolution_status": "completed" if claim_data else "information_provided"
         }
         
+        # Update call record
         await session.update_call_record(
             status=CallStatus.ENDED,
             ended_at=end_time,
@@ -816,7 +888,8 @@ async def finalize_call_record(session: CallSession, agent_state: AgentState):
     except Exception as e:
         logger.error(f"Error finalizing call record: {e}")
 
-# Test endpoint
+# Additional WebSocket endpoints for testing and monitoring
+
 @websocket_router.websocket("/ws/test/{session_id}")
 async def websocket_test(websocket: WebSocket, session_id: str):
     """Test WebSocket endpoint for development"""
@@ -832,6 +905,7 @@ async def websocket_test(websocket: WebSocket, session_id: str):
         while True:
             message = await websocket.receive_json()
             
+            # Echo back the message with timestamp
             response = {
                 "type": "echo",
                 "original_message": message,
@@ -846,5 +920,178 @@ async def websocket_test(websocket: WebSocket, session_id: str):
     except Exception as e:
         logger.error(f"Test WebSocket error: {e}")
 
-# Export the router - CRITICAL FIX
-__all__ = ["websocket_router"]
+@websocket_router.websocket("/ws/monitor")
+async def websocket_monitor(websocket: WebSocket):
+    """WebSocket endpoint for system monitoring"""
+    await websocket.accept()
+    
+    try:
+        # Send initial status
+        await websocket.send_json({
+            "type": "status",
+            "message": "Monitor connected",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Send periodic system status updates
+        while True:
+            # In a real implementation, this would gather actual system metrics
+            status_update = {
+                "type": "system_status",
+                "timestamp": datetime.now().isoformat(),
+                "active_calls": 0,  # Would be actual count
+                "system_load": "normal",
+                "memory_usage": "45%",
+                "speech_service_status": "operational"
+            }
+            
+            await websocket.send_json(status_update)
+            await asyncio.sleep(30)  # Update every 30 seconds
+            
+    except WebSocketDisconnect:
+        logger.info("Monitor WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"Monitor WebSocket error: {e}")
+
+# Debug and testing functions
+
+async def debug_audio_generation(text: str, voice: str = "en-US-JennyNeural"):
+    """Debug audio generation for quality issues"""
+    logger.info(f"Debugging audio generation for: '{text}'")
+    
+    try:
+        speech_service = SpeechService()
+        await speech_service.initialize()
+        
+        # Test different settings
+        test_settings = [
+            {"rate": "+0%", "pitch": "+0Hz", "name": "default"},
+            {"rate": "-5%", "pitch": "+0Hz", "name": "slightly_slower"},
+            {"rate": "-10%", "pitch": "+0Hz", "name": "slower"},
+            {"rate": "+0%", "pitch": "-2Hz", "name": "lower_pitch"},
+        ]
+        
+        for settings in test_settings:
+            logger.info(f"Testing {settings['name']}: rate={settings['rate']}, pitch={settings['pitch']}")
+            
+            chunk_count = 0
+            total_size = 0
+            
+            async for chunk in speech_service.synthesize(
+                text,
+                voice=voice,
+                rate=settings['rate'],
+                pitch=settings['pitch'],
+                stream=True
+            ):
+                chunk_count += 1
+                total_size += len(chunk)
+            
+            logger.info(f"  Result: {chunk_count} chunks, {total_size} bytes")
+            
+    except Exception as e:
+        logger.error(f"Audio debug failed: {e}")
+
+async def handle_test_voice_message(websocket: WebSocket, speech_service: SpeechService):
+    """Handle voice testing"""
+    test_messages = [
+        ("Testing natural speech. This should sound normal and clear.", "en-US-JennyNeural"),
+        ("Another test with a different voice for comparison.", "en-US-AriaNeural"),
+        ("This is a longer sentence to test speech rhythm and naturalness. It should flow smoothly without sounding rushed or distorted.", "en-US-JennyNeural")
+    ]
+    
+    for text, voice in test_messages:
+        logger.info(f"Testing voice: {voice}")
+        await generate_and_send_tts(websocket, speech_service, text, voice)
+        await asyncio.sleep(2)  # Wait between tests
+
+# Utility functions for WebSocket management
+
+class WebSocketManager:
+    """Manage active WebSocket connections"""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.call_sessions: Dict[str, CallSession] = {}
+    
+    async def connect(self, websocket: WebSocket, session_id: str):
+        """Connect a new WebSocket"""
+        await websocket.accept()
+        self.active_connections[session_id] = websocket
+        logger.info(f"WebSocket connected: {session_id}")
+    
+    def disconnect(self, session_id: str):
+        """Disconnect a WebSocket"""
+        if session_id in self.active_connections:
+            del self.active_connections[session_id]
+        if session_id in self.call_sessions:
+            del self.call_sessions[session_id]
+        logger.info(f"WebSocket disconnected: {session_id}")
+    
+    async def send_personal_message(self, message: str, session_id: str):
+        """Send message to specific session"""
+        websocket = self.active_connections.get(session_id)
+        if websocket:
+            await websocket.send_text(message)
+    
+    async def broadcast(self, message: str):
+        """Broadcast message to all connections"""
+        for websocket in self.active_connections.values():
+            await websocket.send_text(message)
+    
+    def get_active_sessions(self) -> List[str]:
+        """Get list of active session IDs"""
+        return list(self.active_connections.keys())
+    
+    def get_session_count(self) -> int:
+        """Get count of active sessions"""
+        return len(self.active_connections)
+
+# Global WebSocket manager instance
+websocket_manager = WebSocketManager()
+
+# Additional utility endpoints
+
+@websocket_router.websocket("/ws/broadcast")
+async def websocket_broadcast(websocket: WebSocket):
+    """WebSocket endpoint for broadcasting messages"""
+    session_id = str(uuid.uuid4())
+    await websocket_manager.connect(websocket, session_id)
+    
+    try:
+        while True:
+            message = await websocket.receive_text()
+            await websocket_manager.broadcast(f"Broadcast: {message}")
+            
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(session_id)
+    except Exception as e:
+        logger.error(f"Broadcast WebSocket error: {e}")
+        websocket_manager.disconnect(session_id)
+
+# Health check for WebSocket services
+async def websocket_health_check() -> Dict[str, Any]:
+    """Check health of WebSocket services"""
+    try:
+        return {
+            "status": "healthy",
+            "active_connections": websocket_manager.get_session_count(),
+            "active_sessions": websocket_manager.get_active_sessions(),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+# Export key functions for use in other modules
+__all__ = [
+    "websocket_router",
+    "websocket_manager", 
+    "websocket_health_check",
+    "generate_and_send_tts",
+    "send_message_to_client",
+    "CallSession"
+]

@@ -62,3 +62,106 @@ emotions:
   confused: "friendly"
   urgent: "urgent"
   professional: "professional"
+
+
+# Natural Voice Configuration - FIXED for human-like speech
+# Add this to your config/voices.yaml or create a new config file
+
+natural_voice_settings:
+  # Primary voice for natural speech
+  default_voice: "en-US-JennyNeural"
+  
+  # Speech rate settings (slower = more natural)
+  speech_rates:
+    very_slow: "-25%"
+    slow: "-15%"      # Recommended for natural speech
+    normal: "-8%"
+    fast: "+0%"
+    very_fast: "+10%"
+  
+  # Pitch settings for natural sound
+  pitch_settings:
+    low: "-3Hz"
+    natural: "+0Hz"   # Recommended
+    high: "+3Hz"
+  
+  # Volume settings
+  volume_levels:
+    quiet: "-10%"
+    normal: "+0%"     # Recommended
+    loud: "+10%"
+
+# Voice presets for different scenarios
+voice_presets:
+  customer_service:
+    voice: "en-US-JennyNeural"
+    rate: "-15%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Friendly, natural customer service voice"
+  
+  professional:
+    voice: "en-US-AriaNeural"
+    rate: "-12%"
+    pitch: "+0Hz"
+    volume: "+0%"
+    description: "Professional, clear business voice"
+  
+  empathetic:
+    voice: "en-US-SaraNeural"
+    rate: "-18%"
+    pitch: "-1Hz"
+    volume: "+0%"
+    description: "Warm, empathetic support voice"
+  
+  urgent:
+    voice: "en-US-JennyNeural"
+    rate: "-5%"
+    pitch: "+1Hz"
+    volume: "+5%"
+    description: "Urgent but still natural voice"
+
+# Audio streaming settings for natural playback
+streaming_settings:
+  chunk_delay_ms: 50        # Delay between audio chunks (natural timing)
+  max_chunk_size: 8192      # 8KB chunks for smooth streaming
+  audio_format: "mp3"       # Best format for Edge TTS
+  sample_rate: 24000        # Edge TTS default
+  
+# Client-side playback settings
+client_playback:
+  playback_rate: 1.0        # NEVER change - normal speed
+  volume: 0.8               # 80% volume
+  preload: "auto"           # Preload audio for smooth playback
+  preserve_pitch: true      # Maintain natural pitch
+
+# Quality settings
+quality_settings:
+  # Use these for high-quality natural speech
+  preferred_voices:
+    - "en-US-JennyNeural"   # Most natural female voice
+    - "en-US-AriaNeural"    # Professional female voice
+    - "en-US-GuyNeural"     # Natural male voice
+    - "en-US-DavisNeural"   # Friendly male voice
+  
+  avoid_voices:
+    - "en-US-Zira"          # Older, less natural
+    - "en-US-David"         # Robotic sounding
+  
+  # Natural speech patterns
+  sentence_breaks: 0.3      # Pause between sentences (seconds)
+  paragraph_breaks: 0.6     # Pause between paragraphs (seconds)
+  
+# Error handling and fallbacks
+fallback_settings:
+  fallback_voice: "en-US-AriaNeural"
+  fallback_rate: "-10%"
+  fallback_message: "I apologize, there was an audio issue. Please try again."
+  max_retries: 3
+  
+# Debugging settings
+debug:
+  log_audio_generation: true
+  log_chunk_timing: false
+  log_playback_stats: true
+  test_phrase: "Hello, this is a test of natural speech quality."

@@ -1,79 +1,72 @@
 """
-Complete Speech synthesis and recognition service - FIXED with all methods
-Replace your entire app/services/speech_service.py with this file
+FIXED Speech Service - VAD chunk size issue resolved
+Replace your app/services/speech_service.py with this version
 """
 import asyncio
 import edge_tts
 from faster_whisper import WhisperModel
 import numpy as np
 from pathlib import Path
-import hashlib
-from typing import Optional, AsyncGenerator, Dict, List, Any
+import tempfile
+from typing import Optional, AsyncGenerator
 import torch
 import aiofiles
-import tempfile
+
 from app.core.config import settings
 from app.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
 class VoiceStyle:
-    """Available voice styles"""
+    """Production voice styles"""
     PROFESSIONAL = "en-US-AriaNeural"
-    FRIENDLY = "en-US-JennyNeural"
-    TECHNICAL = "en-US-TonyNeural"
+    FRIENDLY = "en-US-JennyNeural" 
     EMPATHETIC = "en-US-SaraNeural"
-    MULTILINGUAL = "en-US-JennyMultilingualNeural"
 
 class SpeechService:
-    """Complete Speech Service with STT, TTS, and VAD - FIXED VERSION"""
+    """FIXED Speech Service - VAD chunk size issues resolved"""
     
     def __init__(self):
         self.tts_cache_dir = Path(settings.CACHE_DIR) / "tts"
         self.tts_cache_dir.mkdir(parents=True, exist_ok=True)
         
         self.stt_model = None
-        self.voices_cache = {}
-        self.current_voice = VoiceStyle.FRIENDLY  # Default to Jenny for natural sound
-        
-        # VAD model
         self.vad_model = None
+        self.current_voice = VoiceStyle.FRIENDLY
         
-        # FIXED: Natural voice settings
+        # Production voice settings
         self.voice_settings = {
-            "voice": "en-US-JennyNeural",  # Natural female voice
-            "rate": "-15%",  # Slower for natural speech
-            "pitch": "+0Hz",  # Natural pitch
-            "volume": "+0%"  # Normal volume
+            "voice": "en-US-JennyNeural",
+            "rate": "-12%",
+            "pitch": "+0Hz", 
+            "volume": "+0%"
         }
         
+        # VAD settings - FIXED
+        self.vad_sample_rate = 16000
+        self.vad_chunk_size = 512  # CRITICAL: Exact requirement for Silero VAD
+        
     async def initialize(self):
-        """Initialize speech models"""
-        logger.info("Initializing complete speech service...")
+        """Initialize speech components"""
+        logger.info("🎤 Initializing FIXED speech service...")
         
-        # Initialize STT
-        await self._init_stt()
-        
-        # Initialize VAD
-        await self._init_vad()
-        
-        # Cache available voices
-        await self._cache_voices()
-        
-        # Test voice generation
-        await self.test_voice_generation()
-        
-        logger.info("Complete speech service initialized successfully")
-        
+        try:
+            await self._init_stt()
+            await self._init_vad()
+            logger.info("✅ FIXED speech service ready")
+            
+        except Exception as e:
+            logger.error(f"Speech service initialization failed: {e}")
+            raise
+            
     async def _init_stt(self):
-        """Initialize Whisper model"""
+        """Initialize Whisper"""
         try:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
             
-            logger.info(f"Initializing Whisper model on {device} with {compute_type}")
+            logger.info(f"Loading Whisper: {settings.STT_MODEL} on {device}")
             
-            # Run in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
             self.stt_model = await loop.run_in_executor(
                 None,
@@ -84,19 +77,17 @@ class SpeechService:
                 )
             )
             
-            logger.info("Whisper model initialized successfully")
+            logger.info("✅ Whisper loaded")
             
         except Exception as e:
-            logger.error(f"Failed to initialize Whisper model: {e}")
-            # Continue without STT rather than failing completely
+            logger.warning(f"Whisper initialization failed: {e}")
             self.stt_model = None
         
     async def _init_vad(self):
-        """Initialize Voice Activity Detection"""
+        """Initialize VAD with FIXED settings"""
         try:
             torch.set_num_threads(1)
             
-            # Run in thread pool to avoid blocking
             loop = asyncio.get_event_loop()
             model_and_utils = await loop.run_in_executor(
                 None,
@@ -108,116 +99,106 @@ class SpeechService:
             )
             
             self.vad_model = model_and_utils[0] if isinstance(model_and_utils, tuple) else model_and_utils
-            logger.info("VAD model initialized successfully")
+            logger.info("✅ VAD loaded with FIXED chunk size support")
             
         except Exception as e:
-            logger.warning(f"Failed to initialize VAD model: {e}")
+            logger.warning(f"VAD initialization failed: {e}")
             self.vad_model = None
-        
-    async def _cache_voices(self):
-        """Cache available TTS voices"""
-        try:
-            voices = await edge_tts.list_voices()
-            
-            # Organize by language
-            for voice in voices:
-                lang = voice['Locale'].split('-')[0]
-                if lang not in self.voices_cache:
-                    self.voices_cache[lang] = []
-                self.voices_cache[lang].append(voice)
-                
-            logger.info(f"Cached {len(voices)} TTS voices")
-        except Exception as e:
-            logger.error(f"Failed to cache voices: {e}")
     
-    async def test_voice_generation(self):
-        """Test voice generation to ensure quality"""
-        try:
-            test_text = "Hello, this is a test of natural speech quality."
-            
-            # Generate test audio
-            chunks = []
-            async for chunk in self.synthesize_natural(test_text, stream=True):
-                chunks.append(chunk)
-            
-            total_size = sum(len(chunk) for chunk in chunks)
-            logger.info(f"Voice test successful: {len(chunks)} chunks, {total_size} bytes")
-            
-        except Exception as e:
-            logger.error(f"Voice test failed: {e}")
-            
     def detect_voice_activity(self, audio: np.ndarray, sample_rate: int = 16000) -> bool:
-        """Detect if audio contains speech - FIXED METHOD"""
+        """FIXED: VAD with proper chunk size handling"""
         try:
             if self.vad_model is None:
-                # Fallback to energy-based detection
+                # Fallback energy detection
                 rms_energy = np.sqrt(np.mean(audio**2))
-                threshold = getattr(settings, 'VAD_THRESHOLD', 0.005)
-                return rms_energy > threshold
-                
-            # Convert to tensor with proper type
+                return rms_energy > 0.005
+            
+            # CRITICAL FIX: Ensure proper audio format and size
             if isinstance(audio, np.ndarray):
                 if audio.dtype != np.float32:
                     audio = audio.astype(np.float32)
                 audio_tensor = torch.from_numpy(audio).float()
             else:
                 audio_tensor = audio
+            
+            # CRITICAL FIX: Ensure exactly 512 samples for 16kHz
+            required_samples = 512 if sample_rate == 16000 else 256
+            
+            if len(audio_tensor) != required_samples:
+                if len(audio_tensor) > required_samples:
+                    # Truncate to required size
+                    audio_tensor = audio_tensor[:required_samples]
+                    logger.debug(f"Truncated audio to {required_samples} samples")
+                else:
+                    # Pad to required size
+                    padding = required_samples - len(audio_tensor)
+                    audio_tensor = torch.nn.functional.pad(audio_tensor, (0, padding))
+                    logger.debug(f"Padded audio to {required_samples} samples")
+            
+            # Validate tensor shape and content
+            if len(audio_tensor.shape) != 1:
+                logger.error(f"Invalid audio tensor shape: {audio_tensor.shape}")
+                return False
+            
+            if torch.isnan(audio_tensor).any() or torch.isinf(audio_tensor).any():
+                logger.warning("Audio contains NaN or Inf values")
+                return False
+            
+            # Run VAD with proper error handling
+            try:
+                speech_prob = self.vad_model(audio_tensor, sample_rate).item()
+                is_speech = speech_prob > 0.5
                 
-            # Ensure audio is long enough for VAD (minimum 512 samples)
-            if len(audio_tensor) < 512:
-                # Pad with zeros if too short
-                padding = 512 - len(audio_tensor)
-                audio_tensor = torch.nn.functional.pad(audio_tensor, (0, padding))
-            
-            # Run VAD
-            speech_prob = self.vad_model(audio_tensor, sample_rate).item()
-            threshold = getattr(settings, 'VAD_THRESHOLD', 0.5)
-            return speech_prob > threshold
-            
+                logger.debug(f"VAD result: {speech_prob:.3f} -> {'speech' if is_speech else 'silence'}")
+                return is_speech
+                
+            except Exception as vad_error:
+                logger.warning(f"VAD model failed: {vad_error}")
+                # Fallback to energy detection
+                rms_energy = np.sqrt(np.mean(audio_tensor.numpy()**2))
+                return rms_energy > 0.005
+                
         except Exception as e:
             logger.error(f"VAD error: {e}")
-            # Fallback to energy-based detection
+            # Safe fallback
             try:
-                rms_energy = np.sqrt(np.mean(audio**2))
+                if isinstance(audio, torch.Tensor):
+                    audio_np = audio.numpy()
+                else:
+                    audio_np = audio
+                rms_energy = np.sqrt(np.mean(audio_np**2))
                 return rms_energy > 0.005
             except:
                 return False
         
-    async def transcribe(
-        self,
-        audio: np.ndarray,
-        language: str = "en"
-    ) -> Optional[str]:
-        """Transcribe audio to text - FIXED METHOD"""
+    async def transcribe(self, audio: np.ndarray, language: str = "en") -> Optional[str]:
+        """FIXED: Transcribe with proper audio handling"""
         try:
             if self.stt_model is None:
                 logger.warning("STT model not available")
                 return None
                 
-            # CRITICAL FIX: Ensure audio is float32, not double
+            # Ensure proper format
             if audio.dtype != np.float32:
-                logger.debug(f"Converting audio from {audio.dtype} to float32")
                 audio = audio.astype(np.float32)
             
-            # Additional validation
             if len(audio) == 0:
-                logger.debug("Empty audio array, skipping transcription")
                 return None
             
-            # Ensure audio values are in valid range [-1, 1]
-            if np.max(np.abs(audio)) > 1.0:
-                logger.debug("Normalizing audio values to [-1, 1] range")
-                audio = audio / np.max(np.abs(audio))
+            # Normalize audio safely
+            max_val = np.max(np.abs(audio))
+            if max_val > 1.0:
+                audio = audio / max_val
             
-            # Check if audio has sufficient content
+            # Check if audio has content
             rms_energy = np.sqrt(np.mean(audio**2))
-            if rms_energy < 0.001:  # Very quiet audio
-                logger.debug(f"Audio too quiet (RMS: {rms_energy}), skipping transcription")
+            if rms_energy < 0.001:
+                logger.debug("Audio too quiet for transcription")
                 return None
             
-            logger.debug(f"Transcribing audio: shape={audio.shape}, dtype={audio.dtype}, RMS={rms_energy:.6f}")
+            logger.debug(f"Transcribing: {audio.shape}, RMS: {rms_energy:.6f}")
             
-            # Run transcription in thread pool to avoid blocking
+            # Run transcription
             loop = asyncio.get_event_loop()
             
             try:
@@ -232,41 +213,40 @@ class SpeechService:
                             threshold=0.5,
                             min_speech_duration_ms=250
                         ),
-                        beam_size=1,  # Reduce beam size for stability
-                        temperature=0.0,  # Deterministic output
+                        beam_size=1,
+                        temperature=0.0,
                         compression_ratio_threshold=2.4,
                         log_prob_threshold=-1.0,
                         no_speech_threshold=0.6
                     )
                 )
                 
-                # Process segments safely
-                transcription_parts = []
+                # Extract text
+                text_parts = []
                 for segment in segments:
                     text = segment.text.strip()
-                    if text and len(text) > 1:  # Ignore single characters
-                        transcription_parts.append(text)
+                    if text and len(text) > 1:
+                        text_parts.append(text)
                 
-                if transcription_parts:
-                    final_text = " ".join(transcription_parts)
-                    logger.info(f"Transcription successful: '{final_text}'")
-                    return final_text
+                if text_parts:
+                    result = " ".join(text_parts)
+                    logger.info(f"✅ Transcribed: '{result}'")
+                    return result
                 else:
-                    logger.debug("No meaningful transcription segments found")
+                    logger.debug("No meaningful transcription")
                     return None
                     
             except Exception as transcription_error:
-                logger.error(f"Whisper transcription failed: {transcription_error}")
+                logger.error(f"Transcription failed: {transcription_error}")
                 
-                # Try with more conservative settings
-                logger.debug("Trying conservative transcription settings...")
+                # Try conservative settings
                 try:
                     segments, _ = await loop.run_in_executor(
                         None,
                         lambda: self.stt_model.transcribe(
                             audio,
                             language=language,
-                            vad_filter=False,  # Disable VAD
+                            vad_filter=False,
                             beam_size=1,
                             temperature=0.0
                         )
@@ -275,11 +255,11 @@ class SpeechService:
                     text_parts = [segment.text.strip() for segment in segments if segment.text.strip()]
                     if text_parts:
                         result = " ".join(text_parts)
-                        logger.info(f"Conservative transcription successful: '{result}'")
+                        logger.info(f"✅ Conservative transcription: '{result}'")
                         return result
                         
                 except Exception as conservative_error:
-                    logger.error(f"Conservative transcription also failed: {conservative_error}")
+                    logger.error(f"Conservative transcription failed: {conservative_error}")
                 
                 return None
                 
@@ -293,61 +273,59 @@ class SpeechService:
         voice: Optional[str] = None,
         stream: bool = True
     ) -> AsyncGenerator[bytes, None]:
-        """
-        Generate natural-sounding TTS audio with FIXED settings
-        This method specifically addresses robotic/fast voice issues
-        """
+        """Generate natural TTS audio"""
         try:
-            # FIXED: Use consistent natural voice settings
+            if not text.strip():
+                logger.warning("Empty text for TTS")
+                return
+                
+            # Use production settings
             actual_voice = voice or self.voice_settings["voice"]
-            natural_rate = self.voice_settings["rate"]  # -15% slower
-            natural_pitch = self.voice_settings["pitch"]  # Natural pitch
-            natural_volume = self.voice_settings["volume"]  # Normal volume
+            rate = self.voice_settings["rate"]
+            pitch = self.voice_settings["pitch"]
+            volume = self.voice_settings["volume"]
             
-            logger.info(f"Generating NATURAL TTS: '{text[:50]}...' with {actual_voice}")
+            logger.info(f"🎤 Generating TTS: '{text[:50]}...'")
             
             if stream:
-                # FIXED: Natural streaming with proper timing
+                # Streaming generation
                 communicate = edge_tts.Communicate(
                     text=text,
                     voice=actual_voice,
-                    rate=natural_rate,
-                    pitch=natural_pitch,
-                    volume=natural_volume
+                    rate=rate,
+                    pitch=pitch,
+                    volume=volume
                 )
                 
-                # Collect all chunks first to prevent fragmentation
-                collected_chunks = []
-                chunk_count = 0
-                
+                # Collect chunks for smooth delivery
+                chunks = []
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
-                        chunk_count += 1
-                        collected_chunks.append(chunk["data"])
+                        chunks.append(chunk["data"])
                 
-                # CRITICAL FIX: Send complete audio in optimal chunks
-                if collected_chunks:
-                    complete_audio = b''.join(collected_chunks)
+                # Send in optimal sizes
+                if chunks:
+                    complete_audio = b''.join(chunks)
                     
-                    # Send in 8KB chunks for smooth playback
+                    # Send in 8KB chunks
                     chunk_size = 8192
                     for i in range(0, len(complete_audio), chunk_size):
                         audio_chunk = complete_audio[i:i + chunk_size]
                         yield audio_chunk
                         
-                        # IMPORTANT: Natural timing between chunks
-                        await asyncio.sleep(0.1)  # 100ms delay
+                        # Natural timing
+                        await asyncio.sleep(0.08)
                 
-                logger.info(f"Natural streaming completed: {chunk_count} source chunks")
+                logger.info("✅ TTS streaming completed")
                 
             else:
-                # Generate complete audio file
+                # Complete file generation
                 communicate = edge_tts.Communicate(
                     text=text,
                     voice=actual_voice,
-                    rate=natural_rate,
-                    pitch=natural_pitch,
-                    volume=natural_volume
+                    rate=rate,
+                    pitch=pitch,
+                    volume=volume
                 )
                 
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
@@ -360,7 +338,7 @@ class SpeechService:
                         audio_data = await f.read()
                     
                     yield audio_data
-                    logger.info(f"Generated natural complete audio: {len(audio_data)} bytes")
+                    logger.info(f"✅ TTS file generated: {len(audio_data)} bytes")
                     
                 finally:
                     try:
@@ -369,77 +347,29 @@ class SpeechService:
                         pass
                         
         except Exception as e:
-            logger.error(f"Natural TTS generation failed: {e}")
-            # Fallback to simple generation
-            fallback_audio = await self._generate_fallback_audio(text)
-            if fallback_audio:
-                yield fallback_audio
+            logger.error(f"TTS generation failed: {e}")
 
-    async def synthesize(
-        self,
-        text: str,
-        voice: Optional[str] = None,
-        rate: str = "+0%",
-        pitch: str = "+0Hz",
-        stream: bool = True
-    ) -> AsyncGenerator[bytes, None]:
-        """Legacy synthesize method - redirects to natural synthesis"""
-        # Always use natural synthesis for consistent results
-        async for chunk in self.synthesize_natural(text, voice, stream):
+    async def synthesize(self, text: str, voice: Optional[str] = None, **kwargs) -> AsyncGenerator[bytes, None]:
+        """Legacy method - redirects to natural synthesis"""
+        async for chunk in self.synthesize_natural(text, voice, stream=True):
             yield chunk
 
-    async def _generate_fallback_audio(self, original_text: str) -> bytes:
-        """Generate fallback audio when primary generation fails"""
-        try:
-            fallback_text = "I apologize, there was an audio issue. Please try again."
-            
-            communicate = edge_tts.Communicate(
-                fallback_text,
-                voice="en-US-AriaNeural",  # Reliable fallback voice
-                rate="-10%",
-                pitch="+0Hz",
-                volume="+0%"
-            )
-            
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
-                temp_path = temp_file.name
-            
-            try:
-                await communicate.save(temp_path)
-                
-                async with aiofiles.open(temp_path, 'rb') as f:
-                    return await f.read()
-            finally:
-                try:
-                    Path(temp_path).unlink()
-                except:
-                    pass
-                    
-        except Exception as e:
-            logger.error(f"Fallback audio generation failed: {e}")
-            return b""
-
-    def _get_cache_key(self, text: str, voice: str, rate: str, pitch: str) -> str:
-        """Generate cache key for TTS"""
-        key_string = f"{text}_{voice}_{rate}_{pitch}"
-        return hashlib.md5(key_string.encode()).hexdigest()
-        
     def set_voice(self, voice: str):
-        """Set current voice with natural settings"""
+        """Set voice with production settings"""
         voice_presets = {
             "professional": {
                 "voice": "en-US-AriaNeural",
-                "rate": "-12%",
+                "rate": "-10%",
                 "pitch": "+0Hz"
             },
             "friendly": {
-                "voice": "en-US-JennyNeural",
-                "rate": "-15%",
-                "pitch": "+1Hz"
+                "voice": "en-US-JennyNeural", 
+                "rate": "-12%",
+                "pitch": "+0Hz"
             },
             "empathetic": {
-                "voice": "en-US-SaraNeural", 
-                "rate": "-18%",
+                "voice": "en-US-SaraNeural",
+                "rate": "-15%", 
                 "pitch": "-1Hz"
             }
         }
@@ -450,135 +380,17 @@ class SpeechService:
             self.voice_settings["voice"] = voice
             
         self.current_voice = self.voice_settings["voice"]
-        logger.info(f"Voice set to: {self.current_voice} with natural settings")
-        
-    async def get_voice_for_language(self, language: str, gender: str = "Female") -> Optional[str]:
-        """Get appropriate voice for language"""
-        lang_code = language.lower()[:2]
-        
-        if lang_code in self.voices_cache:
-            voices = self.voices_cache[lang_code]
-            gender_voices = [v for v in voices if v.get('Gender', '').lower() == gender.lower()]
-            
-            if gender_voices:
-                # Prefer neural voices
-                neural_voices = [v for v in gender_voices if 'Neural' in v['ShortName']]
-                if neural_voices:
-                    return neural_voices[0]['ShortName']
-                return gender_voices[0]['ShortName']
-                
-        return None
+        logger.info(f"🎤 Voice set to: {self.current_voice}")
 
-    async def test_voice_quality(self, test_text: str = "This is a test of natural sounding speech"):
-        """Test voice generation for quality assurance"""
-        logger.info("Testing voice quality...")
-        
-        try:
-            chunk_count = 0
-            total_size = 0
-            
-            async for chunk in self.synthesize_natural(test_text, stream=True):
-                chunk_count += 1
-                total_size += len(chunk)
-            
-            logger.info(f"Voice quality test completed: {chunk_count} chunks, {total_size} bytes")
-            return {"success": True, "chunks": chunk_count, "size": total_size}
-            
-        except Exception as e:
-            logger.error(f"Voice quality test failed: {e}")
-            return {"success": False, "error": str(e)}
+    def get_stats(self) -> dict:
+        """Get service statistics"""
+        return {
+            "stt_available": self.stt_model is not None,
+            "vad_available": self.vad_model is not None,
+            "current_voice": self.current_voice,
+            "voice_settings": self.voice_settings,
+            "vad_chunk_size": self.vad_chunk_size,
+            "vad_sample_rate": self.vad_sample_rate
+        }
 
-    async def clear_cache(self):
-        """Clear TTS cache"""
-        try:
-            import shutil
-            if self.tts_cache_dir.exists():
-                shutil.rmtree(self.tts_cache_dir)
-                self.tts_cache_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("TTS cache cleared")
-        except Exception as e:
-            logger.error(f"Failed to clear cache: {e}")
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        """Get cache statistics"""
-        try:
-            if not self.tts_cache_dir.exists():
-                return {"files": 0, "size_mb": 0}
-            
-            files = list(self.tts_cache_dir.glob("*.mp3"))
-            total_size = sum(f.stat().st_size for f in files)
-            
-            return {
-                "files": len(files),
-                "size_mb": round(total_size / (1024 * 1024), 2),
-                "cache_dir": str(self.tts_cache_dir)
-            }
-        except Exception as e:
-            logger.error(f"Failed to get cache stats: {e}")
-            return {"error": str(e)}
-
-    async def preload_common_phrases(self):
-        """Preload common phrases for faster response"""
-        common_phrases = [
-            "Hello! How can I help you today?",
-            "I understand your concern. Let me help you with that.",
-            "Could you please provide more details?",
-            "Thank you for calling. Have a great day!",
-            "I'm transferring you to a human agent now.",
-            "Your claim has been created successfully.",
-            "Is there anything else I can help you with?"
-        ]
-        
-        logger.info("Preloading common phrases...")
-        
-        for phrase in common_phrases:
-            try:
-                # Generate and cache each phrase
-                chunks = []
-                async for chunk in self.synthesize_natural(phrase, stream=False):
-                    chunks.append(chunk)
-                logger.debug(f"Preloaded: '{phrase[:30]}...'")
-            except Exception as e:
-                logger.warning(f"Failed to preload phrase '{phrase[:30]}...': {e}")
-        
-        logger.info("Common phrases preloaded")
-
-# Helper function for WebSocket integration
-async def generate_and_send_tts_simple(
-    websocket,
-    speech_service: SpeechService,
-    text: str,
-    voice_style: str = "friendly"
-):
-    """Simple TTS generation for consistent results"""
-    try:
-        logger.info(f"Generating consistent TTS: '{text[:50]}...'")
-        
-        # Force consistent settings
-        speech_service.set_voice(voice_style)
-        
-        # Generate with consistent parameters
-        chunk_count = 0
-        async for audio_chunk in speech_service.synthesize_natural(
-            text, 
-            stream=True
-        ):
-            chunk_count += 1
-            hex_data = audio_chunk.hex()
-            
-            await websocket.send_json({
-                "type": "audio",
-                "data": hex_data,
-                "chunk": chunk_count,
-                "voice": voice_style,
-                "consistent": True
-            })
-            
-            # Controlled timing
-            await asyncio.sleep(0.02)
-        
-        logger.info(f"Consistent TTS completed: {chunk_count} chunks")
-        
-    except Exception as e:
-        logger.error(f"Simple TTS generation failed: {e}")
-        raise
+logger.info("✅ FIXED Speech Service loaded - VAD chunk size issues resolved")

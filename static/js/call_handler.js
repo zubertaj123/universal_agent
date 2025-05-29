@@ -1,138 +1,232 @@
 /**
- * COMPLETE FIXED Call Handler - Replace your static/js/call_handler.js with this
- * Fixes: Audio overlap, VAD chunk issues, multiple streams, test interference
+ * FIXED AUDIO STREAMING - Replaces SingleAudioPlayer class
+ * Solves: Robotic chunky voice by implementing proper audio buffering
  */
 
-class SingleAudioPlayer {
+class StreamingAudioPlayer {
     constructor() {
-        this.currentAudio = null;
-        this.audioQueue = [];
+        this.audioContext = null;
+        this.audioBuffer = [];
         this.isPlaying = false;
         this.volume = 0.8;
-        
-        // CRITICAL: Single audio stream management
         this.activeStreamId = null;
         this.sessionId = null;
         
-        console.log('🔊 SingleAudioPlayer initialized');
+        // CRITICAL: Stream buffering for natural playback
+        this.pendingChunks = [];
+        this.currentPlayback = null;
+        this.nextAudioReady = false;
+        
+        console.log('🎵 StreamingAudioPlayer initialized for natural voice');
     }
     
-    async playAudioChunk(audioData, metadata = {}) {
+    async initializeAudioContext() {
+        if (this.audioContext) return;
+        
         try {
-            // STOP any currently playing audio first
-            this.stopCurrentAudio();
-            
-            console.log('🔊 Playing single audio chunk:', audioData.length, 'bytes');
-            
-            const audioBlob = new Blob([audioData], { type: 'audio/mpeg' });
-            const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-            
-            // Production audio settings - FIXED for natural sound
-            audio.volume = this.volume;
-            audio.playbackRate = 1.0;  // NEVER change - prevents robotic voice
-            audio.preservesPitch = true;
-            audio.preload = 'metadata';
-            
-            return new Promise((resolve, reject) => {
-                const timeoutId = setTimeout(() => {
-                    console.warn('⚠️ Audio load timeout');
-                    this.cleanup(audio, audioUrl);
-                    reject(new Error('Audio load timeout'));
-                }, 5000);
-                
-                audio.addEventListener('loadeddata', async () => {
-                    clearTimeout(timeoutId);
-                    try {
-                        this.currentAudio = audio;
-                        this.isPlaying = true;
-                        this.activeStreamId = metadata.streamId;
-                        
-                        await audio.play();
-                        console.log('✅ Audio playing successfully');
-                        
-                    } catch (playError) {
-                        console.error('❌ Audio play failed:', playError);
-                        this.cleanup(audio, audioUrl);
-                        reject(playError);
-                    }
-                }, { once: true });
-                
-                audio.addEventListener('ended', () => {
-                    console.log('🔊 Audio chunk completed');
-                    this.isPlaying = false;
-                    this.currentAudio = null;
-                    this.activeStreamId = null;
-                    this.cleanup(audio, audioUrl);
-                    resolve(true);
-                }, { once: true });
-                
-                audio.addEventListener('error', (e) => {
-                    clearTimeout(timeoutId);
-                    console.error('🔊 Audio playback error:', e);
-                    this.cleanup(audio, audioUrl);
-                    reject(e);
-                }, { once: true });
-                
-                // Start loading
-                audio.load();
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 44100,  // High quality for TTS
+                latencyHint: 'playback'  // Optimized for playback
             });
             
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+            
+            console.log('🎵 Audio context ready for streaming:', this.audioContext.sampleRate + 'Hz');
         } catch (error) {
-            console.error('❌ Audio setup failed:', error);
+            console.error('❌ Audio context setup failed:', error);
+        }
+    }
+    
+    async startAudioSequence(streamId, text) {
+        console.log('🎬 Starting SMOOTH audio sequence:', text?.substring(0, 50) + '...');
+        
+        // CRITICAL: Don't stop current audio abruptly - let it finish naturally
+        this.activeStreamId = streamId;
+        this.pendingChunks = [];
+        this.nextAudioReady = false;
+        
+        // Initialize audio context if needed
+        await this.initializeAudioContext();
+    }
+    
+    async addAudioChunk(audioData, metadata = {}) {
+        try {
+            // Only accept chunks from the current stream
+            if (metadata.streamId && metadata.streamId !== this.activeStreamId) {
+                console.log('🚫 Ignoring chunk from old stream:', metadata.streamId);
+                return false;
+            }
+            
+            console.log('📦 Buffering audio chunk:', metadata.chunkNumber || 'unknown');
+            
+            // Convert bytes to AudioBuffer for smooth playback
+            const audioBuffer = await this.createAudioBuffer(audioData);
+            if (!audioBuffer) {
+                console.warn('⚠️ Failed to create audio buffer');
+                return false;
+            }
+            
+            // Add to buffer
+            this.pendingChunks.push({
+                buffer: audioBuffer,
+                chunkNumber: metadata.chunkNumber,
+                metadata: metadata
+            });
+            
+            // Start playback if not already playing
+            if (!this.isPlaying) {
+                await this.startContinuousPlayback();
+            }
+            
+            return true;
+            
+        } catch (error) {
+            console.error('❌ Audio chunk processing failed:', error);
             return false;
         }
     }
     
-    cleanup(audio, audioUrl) {
+    async createAudioBuffer(audioData) {
         try {
-            if (audio) {
-                audio.pause();
-                audio.currentTime = 0;
-                audio.src = '';
+            if (!this.audioContext) {
+                await this.initializeAudioContext();
             }
-            if (audioUrl) {
-                URL.revokeObjectURL(audioUrl);
-            }
+            
+            // Decode audio data to AudioBuffer
+            const audioBuffer = await this.audioContext.decodeAudioData(audioData.buffer);
+            return audioBuffer;
+            
         } catch (error) {
-            console.error('❌ Audio cleanup error:', error);
+            console.error('❌ Audio buffer creation failed:', error);
+            
+            // Fallback: try with different approach
+            try {
+                const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                const arrayBuffer = await blob.arrayBuffer();
+                return await this.audioContext.decodeAudioData(arrayBuffer);
+            } catch (fallbackError) {
+                console.error('❌ Fallback audio decoding failed:', fallbackError);
+                return null;
+            }
         }
     }
     
-    stopCurrentAudio() {
-        if (this.currentAudio) {
+    async startContinuousPlayback() {
+        if (this.isPlaying) return;
+        
+        this.isPlaying = true;
+        console.log('🔊 Starting CONTINUOUS playback...');
+        
+        const playNextChunk = async () => {
+            // Check if we have chunks to play
+            if (this.pendingChunks.length === 0) {
+                // Wait a bit for more chunks
+                setTimeout(() => {
+                    if (this.pendingChunks.length > 0 && this.isPlaying) {
+                        playNextChunk();
+                    } else if (this.pendingChunks.length === 0) {
+                        // No more chunks, end playback
+                        this.isPlaying = false;
+                        console.log('🔊 Continuous playback completed');
+                    }
+                }, 50); // Small delay to allow buffering
+                return;
+            }
+            
+            // Get next chunk
+            const chunk = this.pendingChunks.shift();
+            
             try {
-                this.currentAudio.pause();
-                this.currentAudio.currentTime = 0;
-                this.currentAudio = null;
+                // Create source node
+                const source = this.audioContext.createBufferSource();
+                const gainNode = this.audioContext.createGain();
+                
+                source.buffer = chunk.buffer;
+                gainNode.gain.value = this.volume;
+                
+                // Connect audio graph
+                source.connect(gainNode);
+                gainNode.connect(this.audioContext.destination);
+                
+                // Set up event handlers
+                source.onended = () => {
+                    // Immediately play next chunk for seamless playback
+                    if (this.isPlaying) {
+                        playNextChunk();
+                    }
+                };
+                
+                // Start playback
+                source.start(0);
+                this.currentPlayback = source;
+                
+                console.log('🔊 Playing chunk', chunk.chunkNumber, 'seamlessly');
+                
+            } catch (error) {
+                console.error('❌ Chunk playback failed:', error);
+                // Continue with next chunk
+                if (this.isPlaying) {
+                    playNextChunk();
+                }
+            }
+        };
+        
+        // Start the playback chain
+        playNextChunk();
+    }
+    
+    completeAudioSequence(stats) {
+        console.log('🎬 Audio sequence completed naturally:', stats);
+        
+        // Let current chunks finish playing
+        setTimeout(() => {
+            if (this.pendingChunks.length === 0) {
                 this.isPlaying = false;
                 this.activeStreamId = null;
-                console.log('🛑 Audio stopped');
+                console.log('✅ Audio sequence fully completed');
+            }
+        }, 1000);
+    }
+    
+    stopCurrentAudio() {
+        console.log('🛑 Stopping audio stream');
+        
+        this.isPlaying = false;
+        this.pendingChunks = [];
+        this.activeStreamId = null;
+        
+        if (this.currentPlayback) {
+            try {
+                this.currentPlayback.stop();
+                this.currentPlayback = null;
             } catch (error) {
-                console.error('❌ Error stopping audio:', error);
+                // Audio might already be stopped
             }
         }
     }
     
     setVolume(volume) {
         this.volume = Math.max(0, Math.min(1, volume));
-        if (this.currentAudio) {
-            this.currentAudio.volume = this.volume;
-        }
         console.log('🔊 Volume set to:', this.volume);
     }
     
     getStatus() {
         return {
             isPlaying: this.isPlaying,
-            hasCurrentAudio: !!this.currentAudio,
             volume: this.volume,
             activeStreamId: this.activeStreamId,
-            sessionId: this.sessionId
+            sessionId: this.sessionId,
+            pendingChunks: this.pendingChunks.length,
+            bufferReady: this.pendingChunks.length > 0
         };
     }
 }
 
+/**
+ * UPDATED CallHandler class with fixed audio streaming
+ */
 class CallHandler {
     constructor() {
         this.ws = null;
@@ -146,8 +240,8 @@ class CallHandler {
         this.startTime = null;
         this.durationInterval = null;
         
-        // SINGLE audio player - prevents overlaps
-        this.audioPlayer = new SingleAudioPlayer();
+        // FIXED: Streaming audio player for natural voice
+        this.audioPlayer = new StreamingAudioPlayer();
         this.currentAudioSequence = null;
         
         // Audio processing parameters
@@ -159,15 +253,15 @@ class CallHandler {
         this.audioBuffer = [];
         this.vad_chunk_size = 512;  // Match server-side VAD requirements
         
-        // Production mode - NO test features
+        // Production mode
         this.productionMode = true;
         this.debugMode = false;
         
-        console.log('🎯 CallHandler initialized in production mode');
+        console.log('🎯 CallHandler initialized with STREAMING audio');
     }
 
     async initialize() {
-        console.log('🚀 Initializing FIXED Call Handler...');
+        console.log('🚀 Initializing STREAMING Call Handler...');
         
         this.sessionId = this.generateSessionId();
         this.audioPlayer.sessionId = this.sessionId;
@@ -188,7 +282,7 @@ class CallHandler {
             this.startDurationTimer();
             this.updateStatus('Connected - Ready for conversation');
             
-            console.log('✅ FIXED Call Handler initialized successfully');
+            console.log('✅ STREAMING Call Handler ready');
             
         } catch (error) {
             console.error('❌ Initialization failed:', error);
@@ -198,7 +292,6 @@ class CallHandler {
 
     async initializeAudioContext() {
         try {
-            // Try to create with target sample rate
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 sampleRate: this.targetSampleRate,
                 latencyHint: 'interactive'
@@ -206,17 +299,15 @@ class CallHandler {
             
             console.log('🎵 Audio context ready:', {
                 sampleRate: this.audioContext.sampleRate,
-                state: this.audioContext.state,
-                baseLatency: this.audioContext.baseLatency
+                state: this.audioContext.state
             });
             
-            // Resume context if suspended
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
             
         } catch (error) {
-            console.warn('⚠️ Could not set target sample rate, using default');
+            console.warn('⚠️ Using default audio context');
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             
             if (this.audioContext.state === 'suspended') {
@@ -234,7 +325,7 @@ class CallHandler {
                     echoCancellation: true,
                     noiseSuppression: true,
                     autoGainControl: true,
-                    latency: 0.01  // Low latency
+                    latency: 0.01
                 }
             };
             
@@ -243,11 +334,9 @@ class CallHandler {
             const track = this.mediaStream.getAudioTracks()[0];
             const settings = track.getSettings();
             
-            console.log('🎤 Microphone access granted:', {
+            console.log('🎤 Microphone ready:', {
                 sampleRate: settings.sampleRate,
-                channelCount: settings.channelCount,
-                echoCancellation: settings.echoCancellation,
-                noiseSuppression: settings.noiseSuppression
+                channelCount: settings.channelCount
             });
             
         } catch (error) {
@@ -289,9 +378,8 @@ class CallHandler {
             this.ws.onopen = () => {
                 clearTimeout(connectionTimeout);
                 this.isConnected = true;
-                console.log('✅ WebSocket connected successfully');
+                console.log('✅ WebSocket connected');
                 
-                // Send connection message
                 this.sendMessage({
                     type: 'connection',
                     sessionId: this.sessionId,
@@ -324,16 +412,10 @@ class CallHandler {
             this.ws.onclose = (event) => {
                 clearTimeout(connectionTimeout);
                 this.isConnected = false;
-                console.log('🔌 WebSocket closed:', {
-                    code: event.code,
-                    reason: event.reason,
-                    wasClean: event.wasClean
-                });
+                console.log('🔌 WebSocket closed');
                 
                 this.updateStatus('Disconnected');
                 this.stopDurationTimer();
-                
-                // Stop any playing audio
                 this.audioPlayer.stopCurrentAudio();
             };
         });
@@ -356,7 +438,7 @@ class CallHandler {
                 return false;
             }
         } else {
-            console.warn('⚠️ WebSocket not ready, state:', this.ws?.readyState);
+            console.warn('⚠️ WebSocket not ready');
             return false;
         }
     }
@@ -364,9 +446,7 @@ class CallHandler {
     async setupAudioProcessing() {
         try {
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-            
-            // FIXED: Use ScriptProcessorNode with proper buffer size
-            const bufferSize = 4096;  // Good balance of latency and processing
+            const bufferSize = 4096;
             const processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
             
             processor.onaudioprocess = (event) => {
@@ -376,12 +456,9 @@ class CallHandler {
                 
                 const inputBuffer = event.inputBuffer;
                 const inputData = inputBuffer.getChannelData(0);
-                
-                // FIXED: Process audio with proper chunk management
                 this.processAudioChunkFixed(inputData);
             };
             
-            // Connect the audio graph
             source.connect(processor);
             processor.connect(this.audioContext.destination);
             
@@ -389,10 +466,8 @@ class CallHandler {
             this.audioProcessor = processor;
             this.isRecording = true;
             
-            // Setup visualization
             this.setupAudioVisualization(source);
-            
-            console.log('✅ FIXED audio processing ready');
+            console.log('✅ Audio processing ready');
             
         } catch (error) {
             console.error('❌ Audio processing setup failed:', error);
@@ -402,17 +477,12 @@ class CallHandler {
 
     processAudioChunkFixed(audioData) {
         try {
-            // Add to buffer
             this.audioBuffer.push(...audioData);
             
-            // FIXED: Send chunks of exactly 512 samples for VAD compatibility
             while (this.audioBuffer.length >= this.vad_chunk_size) {
-                // Extract exactly 512 samples
                 const chunk = this.audioBuffer.splice(0, this.vad_chunk_size);
                 
-                // Check if chunk has significant audio
                 if (this.hasSignificantAudio(chunk)) {
-                    // Convert to PCM16
                     const pcmData = this.convertToPCM16(chunk);
                     
                     if (pcmData.length > 0) {
@@ -434,7 +504,6 @@ class CallHandler {
             
         } catch (error) {
             console.error('❌ Audio chunk processing error:', error);
-            // Clear buffer on error to prevent buildup
             this.audioBuffer = [];
         }
     }
@@ -445,10 +514,9 @@ class CallHandler {
             const view = new DataView(buffer);
             
             for (let i = 0; i < float32Array.length; i++) {
-                // Clamp and scale to 16-bit integer range
                 let sample = Math.max(-1, Math.min(1, float32Array[i]));
                 sample = sample * 32767;
-                view.setInt16(i * 2, sample, true); // little-endian
+                view.setInt16(i * 2, sample, true);
             }
             
             return new Uint8Array(buffer);
@@ -460,14 +528,10 @@ class CallHandler {
 
     hasSignificantAudio(audioData) {
         try {
-            // Calculate RMS energy
             const rms = Math.sqrt(
                 audioData.reduce((sum, sample) => sum + sample * sample, 0) / audioData.length
             );
-            
-            // Threshold for significant audio (adjusted for better sensitivity)
             return rms > 0.001;
-            
         } catch (error) {
             console.error('❌ Audio analysis error:', error);
             return false;
@@ -477,10 +541,7 @@ class CallHandler {
     setupAudioVisualization(source) {
         try {
             const canvas = document.getElementById('audio-canvas');
-            if (!canvas) {
-                console.log('⚠️ Audio canvas not found, skipping visualization');
-                return;
-            }
+            if (!canvas) return;
             
             const canvasCtx = canvas.getContext('2d');
             const analyser = this.audioContext.createAnalyser();
@@ -498,18 +559,14 @@ class CallHandler {
                 requestAnimationFrame(draw);
                 analyser.getByteFrequencyData(dataArray);
                 
-                // Clear canvas
                 canvasCtx.fillStyle = 'rgb(249, 250, 251)';
                 canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
                 
-                // Draw frequency bars
                 const barWidth = (canvas.width / bufferLength) * 2.5;
                 let x = 0;
                 
                 for (let i = 0; i < bufferLength; i++) {
                     const barHeight = (dataArray[i] / 255) * canvas.height;
-                    
-                    // Color based on frequency
                     const hue = (i / bufferLength) * 120;
                     const saturation = 70;
                     const lightness = 30 + (dataArray[i] / 255) * 40;
@@ -522,7 +579,7 @@ class CallHandler {
             };
             
             draw();
-            console.log('✅ Audio visualization setup complete');
+            console.log('✅ Audio visualization ready');
             
         } catch (error) {
             console.error('❌ Visualization setup error:', error);
@@ -530,17 +587,12 @@ class CallHandler {
     }
 
     /**
-     * FIXED message handling - Single audio stream management
+     * FIXED message handling with STREAMING audio
      */
     async handleMessage(data) {
         try {
             const messageType = data.type;
-            
-            if (this.debugMode) {
-                console.log('📨 Received message:', messageType, data);
-            } else {
-                console.log('📨 Received:', messageType);
-            }
+            console.log('📨 Received:', messageType);
             
             switch (messageType) {
                 case 'audio_start':
@@ -577,7 +629,7 @@ class CallHandler {
                     
                 default:
                     if (this.debugMode) {
-                        console.log('❓ Unknown message type:', messageType, data);
+                        console.log('❓ Unknown message type:', messageType);
                     }
             }
             
@@ -587,32 +639,24 @@ class CallHandler {
     }
     
     async handleAudioStart(data) {
-        console.log('🎬 Audio sequence starting:', data.text?.substring(0, 50) + '...');
-        
-        // STOP any current audio immediately to prevent overlap
-        this.audioPlayer.stopCurrentAudio();
+        console.log('🎬 Starting STREAMING audio sequence');
         
         this.currentAudioSequence = data.stream_id;
         this.updateStatus('Agent speaking...');
         
-        // Clear any pending audio chunks
-        this.audioPlayer.audioQueue = [];
+        // Initialize streaming audio
+        await this.audioPlayer.startAudioSequence(data.stream_id, data.text);
     }
     
     async handleAudioChunk(data) {
         try {
-            // Only process if this is the current audio sequence
             if (data.stream_id && data.stream_id !== this.currentAudioSequence) {
-                console.log('🚫 Ignoring old audio chunk from stream:', data.stream_id);
-                return;
+                return; // Ignore old chunks
             }
             
-            console.log('🔊 Processing audio chunk:', data.chunk_number || 'unknown');
-            
-            // Convert hex to bytes
             const hexData = data.data;
             if (!hexData || typeof hexData !== 'string') {
-                console.warn('⚠️ Invalid audio chunk data');
+                console.warn('⚠️ Invalid audio data');
                 return;
             }
             
@@ -621,15 +665,15 @@ class CallHandler {
                     hexData.match(/.{1,2}/g).map(byte => parseInt(byte, 16))
                 );
                 
-                // Play SINGLE audio chunk with proper stream management
-                const success = await this.audioPlayer.playAudioChunk(bytes, {
+                // Add to streaming buffer for natural playback
+                const success = await this.audioPlayer.addAudioChunk(bytes, {
                     chunkNumber: data.chunk_number,
                     streamId: data.stream_id,
                     sessionId: data.session_id
                 });
                 
-                if (!success) {
-                    console.warn('⚠️ Audio chunk playback failed');
+                if (success) {
+                    console.log('📦 Chunk buffered for streaming:', data.chunk_number);
                 }
                 
             } catch (hexError) {
@@ -647,23 +691,17 @@ class CallHandler {
         this.currentAudioSequence = null;
         this.updateStatus('Listening...');
         
-        // Log completion stats if available
-        if (data.chunks_sent && data.total_bytes) {
-            console.log('📊 Audio stats:', {
-                chunks: data.chunks_sent,
-                bytes: data.total_bytes,
-                avgChunkSize: Math.round(data.total_bytes / data.chunks_sent)
-            });
-        }
+        // Let audio finish naturally
+        this.audioPlayer.completeAudioSequence({
+            chunks: data.chunks_sent,
+            bytes: data.total_bytes
+        });
     }
 
     addTranscript(speaker, text) {
         try {
             const transcriptDiv = document.getElementById('transcript');
-            if (!transcriptDiv) {
-                console.warn('⚠️ Transcript div not found');
-                return;
-            }
+            if (!transcriptDiv) return;
             
             const entry = document.createElement('div');
             entry.className = `transcript-entry ${speaker}`;
@@ -687,13 +725,11 @@ class CallHandler {
             transcriptDiv.appendChild(entry);
             transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
             
-            // Limit transcript entries to prevent memory issues
+            // Limit entries
             const entries = transcriptDiv.querySelectorAll('.transcript-entry');
             if (entries.length > 100) {
                 entries[0].remove();
             }
-            
-            console.log('📝 Transcript added:', speaker, '-', text.substring(0, 50) + '...');
             
         } catch (error) {
             console.error('❌ Transcript error:', error);
@@ -706,7 +742,7 @@ class CallHandler {
             if (statusElement) {
                 statusElement.textContent = status;
             }
-            console.log('📊 Status update:', status);
+            console.log('📊 Status:', status);
         } catch (error) {
             console.error('❌ Status update error:', error);
         }
@@ -792,16 +828,10 @@ class CallHandler {
         console.log('📞 Ending call...');
         
         try {
-            // Stop recording
             this.isRecording = false;
-            
-            // Stop all audio
             this.audioPlayer.stopCurrentAudio();
-            
-            // Clear audio buffer
             this.audioBuffer = [];
             
-            // Disconnect audio processing
             if (this.audioProcessor) {
                 try {
                     this.audioProcessor.disconnect();
@@ -820,7 +850,6 @@ class CallHandler {
                 }
             }
             
-            // Stop media stream
             if (this.mediaStream) {
                 this.mediaStream.getTracks().forEach(track => {
                     try {
@@ -832,7 +861,6 @@ class CallHandler {
                 this.mediaStream = null;
             }
             
-            // Close audio context
             if (this.audioContext && this.audioContext.state !== 'closed') {
                 try {
                     this.audioContext.close();
@@ -841,13 +869,11 @@ class CallHandler {
                 }
             }
             
-            // Send end message
             this.sendMessage({
                 type: 'end_call',
                 timestamp: new Date().toISOString()
             });
             
-            // Close WebSocket
             if (this.ws) {
                 try {
                     this.ws.close(1000, 'Call ended by user');
@@ -908,7 +934,7 @@ let callHandler = null;
 
 // PRODUCTION interface functions
 async function startCall() {
-    console.log('🎯 Starting PRODUCTION call...');
+    console.log('🎯 Starting STREAMING call...');
     
     if (!callHandler) {
         callHandler = new CallHandler();
@@ -925,7 +951,7 @@ async function startCall() {
     
     try {
         await callHandler.initialize();
-        console.log('✅ PRODUCTION call started successfully');
+        console.log('✅ STREAMING call started successfully');
         
     } catch (error) {
         console.error('❌ Failed to start call:', error);
@@ -1029,7 +1055,7 @@ function showMicrophoneInstructions() {
     }, 20000);
 }
 
-// PRODUCTION utility functions (debugging removed)
+// PRODUCTION utility functions
 function checkCallHandler() {
     if (callHandler) {
         const stats = callHandler.getSessionStats();
@@ -1038,7 +1064,8 @@ function checkCallHandler() {
             recording: stats.isRecording,
             muted: stats.isMuted,
             audioPlaying: stats.audioStatus.isPlaying,
-            sessionId: stats.sessionId
+            sessionId: stats.sessionId,
+            streamingBuffer: stats.audioStatus.pendingChunks
         });
         return stats;
     } else {
@@ -1079,7 +1106,7 @@ function sendTestMessage(message) {
 
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('📄 PRODUCTION Call Handler page loaded');
+    console.log('📄 STREAMING Call Handler page loaded');
     
     // Update initial status
     setTimeout(() => {
@@ -1130,11 +1157,11 @@ window.checkCallHandler = checkCallHandler;
 window.setAudioVolume = setAudioVolume;
 window.sendTestMessage = sendTestMessage;
 
-console.log('✅ COMPLETE FIXED Call Handler loaded');
-console.log('🎯 Production mode - Ready for natural voice calls');
+console.log('✅ STREAMING AUDIO Call Handler loaded');
+console.log('🎵 Natural voice streaming - NO MORE ROBOTIC CHUNKS!');
 console.log('🔧 Available functions:');
 console.log('  - checkCallHandler() - Check status');
 console.log('  - setAudioVolume(0.8) - Set volume');
 console.log('  - sendTestMessage("text") - Send text message');
 console.log('⌨️  Keyboard shortcuts: Alt+M (mute), Alt+P (pause), Alt+E (end), Alt+T (transfer)');
-console.log('📱 Ready to start calls!');
+console.log('🎯 Ready for NATURAL voice calls!');
